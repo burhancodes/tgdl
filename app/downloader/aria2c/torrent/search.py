@@ -44,14 +44,15 @@ async def initiate_search_tools() -> None:
 
 async def search_torrents(
     key: str,
-    site: str = "all",
+    site: str | list[str] = "all",
     method: str = "apisearch",
 ) -> list[dict[str, Any]]:
     """Performs torrent search using the Magnetio JSON-RPC sidecar backend."""
     limit = settings.search_limit or 300
-
     providers = None
-    if site and site not in ("all", "public"):
+    if isinstance(site, list):
+        providers = [str(p) for p in site if p]
+    elif isinstance(site, str) and site and site not in ("all", "public"):
         providers = [site]
 
     return await search_torrents_rpc(

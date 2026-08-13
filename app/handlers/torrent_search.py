@@ -13,7 +13,6 @@ from pyrogram.types import (
 )
 
 from app.telegraph import telegraph_helper
-
 from ..downloader.aria2c.torrent import (
     SITES,
     MagnetioRPCError,
@@ -23,6 +22,80 @@ from ..downloader.aria2c.torrent import (
 
 log = logging.getLogger(__name__)
 
+PROVIDER_ALIASES: dict[str, str] = {
+    "yts": "yts",
+    "eztv": "eztv",
+    "tpb": "thepiratebay",
+    "piratebay": "thepiratebay",
+    "thepiratebay": "thepiratebay",
+    "tgx": "torrentgalaxy",
+    "torrentgalaxy": "torrentgalaxy",
+    "1337x": "leetx",
+    "1337": "leetx",
+    "leetx": "leetx",
+    "kat": "kickasstorrents",
+    "kickass": "kickasstorrents",
+    "kickasstorrents": "kickasstorrents",
+    "nyaa": "nyaa",
+    "nyaasi": "nyaa",
+    "lime": "limetorrents",
+    "limetorrents": "limetorrents",
+    "bitsearch": "bitsearch",
+    "bt4g": "bt4g",
+    "btdig": "btdig",
+    "glo": "glotorrents",
+    "glotorrents": "glotorrents",
+    "torlock": "torlock",
+    "td": "torrentdownloads",
+    "torrentdownloads": "torrentdownloads",
+    "rarbg": "therarbg",
+    "therarbg": "therarbg",
+    "subsplease": "subsplease",
+    "animetosho": "animetosho",
+    "tosho": "animetosho",
+    "neko": "nekobt",
+    "nekobt": "nekobt",
+    "rutor": "rutor",
+    "rutracker": "rutracker",
+    "animesaturn": "animesaturn",
+    "torznab": "torznab",
+}
+
+def parse_search_query_and_providers(cmd_text: str) -> tuple[str, list[str] | None]:
+    """Parses command string for search query and provider flags (e.g. -yts, -tpb, -1337x, -p=nyaa).
+
+    Returns:
+        tuple[query, selected_providers]
+    """
+    parts = cmd_text.strip().split()
+    if not parts or len(parts) <= 1:
+        return "", None
+
+    args = parts[1:]
+    selected_providers: list[str] = []
+    query_tokens: list[str] = []
+
+    for arg in args:
+        val = arg.strip()
+        if val.startswith("-p=") or val.startswith("--provider="):
+            p_val = val.split("=", 1)[1].strip().lower()
+            canonical = PROVIDER_ALIASES.get(p_val, p_val)
+            if canonical not in selected_providers:
+                selected_providers.append(canonical)
+            continue
+
+        clean_arg = val.lstrip("-").lower()
+        if val.startswith("-") and (clean_arg in PROVIDER_ALIASES or (SITES and clean_arg in SITES)):
+            canonical = PROVIDER_ALIASES.get(clean_arg, clean_arg)
+            if canonical not in selected_providers:
+                selected_providers.append(canonical)
+            continue
+
+        query_tokens.append(arg)
+
+    query = " ".join(query_tokens).strip()
+    providers = selected_providers if selected_providers else None
+    return query, providers
 
 def build_search_keyboard(user_id: int, mode: str = "main") -> InlineKeyboardMarkup:
     """Builds inline keyboards for torrent search modes."""
@@ -51,42 +124,49 @@ def build_search_keyboard(user_id: int, mode: str = "main") -> InlineKeyboardMar
 
 
 async def handle_torrent_search(client: Client, message: Message) -> None:
-    """Command handler for /torsearch and /ts."""
+    """Command handler for /torsearch, /ts, and /search."""
     user_id = message.from_user.id if message.from_user else message.chat.id
     cmd_text = message.text or ""
-    parts = cmd_text.split(maxsplit=1)
+    query, selected_providers = parse_search_query_and_providers(cmd_text)
 
-    if len(parts) == 1:
+    if not query:
         kb = build_search_keyboard(user_id, "main")
-        await message.reply_text(
-            "<b>Torrent Search</b>\nSend a search term with command: <code>/torsearch [query]</code> or <code>/ts [query]</code>",
-            reply_markup=kb if SITES and len(SITES) > 1 else None
+        hint_msg = (
+            "<b>Torrent Search</b>\n"
+            "Send a search term with provider flags, e.g.:\n"
+            "• <code>/ts Avatar</code> (all providers)\n"
+            "• <code>/ts -yts Avatar</code> (YTS only)\n"
+            "• <code>/ts -tpb -1337x Oppenheimer</code> (TPB + 1337x)\n"
+            "• <code>/ts -nyaa Naruto</code> (Nyaa anime)"
         )
+        await message.reply_text(hint_msg, reply_markup=kb if SITES and len(SITES) > 1 else None)
         return
 
-    query = parts[1].strip()
     safe_query = html.escape(query)
-    if SITES and len(SITES) > 1:
-        kb = build_search_keyboard(user_id, "main")
-        await message.reply_text(f"<b>Searching for:</b> <code>{safe_query}</code>\nChoose search backend/site:", reply_markup=kb)
+
+    if selected_providers:
+        provider_names = [SITES.get(p, p.capitalize()) if SITES else p.capitalize() for p in selected_providers]
+        site_label = ", ".join(provider_names)
     else:
-        status_msg = await message.reply_text(f"<b>Searching torrents for:</b> <code>{safe_query}</code>...")
-        try:
-            results = await search_torrents(query, site="public", method="fallback")
-            telegraph_url = await telegraph_helper.generate_telegraph_page(results, query, "Magnetio")
-            if telegraph_url:
-                reply_kb = InlineKeyboardMarkup([[InlineKeyboardButton("VIEW", url=telegraph_url)]])
-                msg = f"<b>Found {len(results)} result(s) for <i>{html.escape(query)}</i>\nSource: <i>Magnetio</i></b>"
-                await status_msg.edit_text(msg, reply_markup=reply_kb)
-            else:
-                formatted_html = format_search_results_html(results, query, "Magnetio")
-                await status_msg.edit_text(formatted_html, disable_web_page_preview=True)
-        except MagnetioRPCError as e:
-            log.warning("Torrent search backend unavailable: %s", e)
-            await status_msg.edit_text("<b>Search backend is unavailable right now, try again shortly.</b>")
-        except Exception as e:
-            log.exception("Torrent search failed: %s", e)
-            await status_msg.edit_text(f"<b>Search error:</b> {e}")
+        site_label = "All Providers"
+
+    status_msg = await message.reply_text(f"<b>Searching torrents ({html.escape(site_label)}) for:</b> <code>{safe_query}</code>...")
+    try:
+        results = await search_torrents(query, site=selected_providers or "all", method="apisearch")
+        telegraph_url = await telegraph_helper.generate_telegraph_page(results, query, site_label)
+        if telegraph_url:
+            reply_kb = InlineKeyboardMarkup([[InlineKeyboardButton("VIEW", url=telegraph_url)]])
+            msg = f"<b>Found {len(results)} result(s) for <i>{safe_query}</i>\nSource: <i>{html.escape(site_label)}</i></b>"
+            await status_msg.edit_text(msg, reply_markup=reply_kb)
+        else:
+            formatted_html = format_search_results_html(results, query, site_label)
+            await status_msg.edit_text(formatted_html, disable_web_page_preview=True)
+    except MagnetioRPCError as e:
+        log.warning("Torrent search backend unavailable: %s", e)
+        await status_msg.edit_text("<b>Search backend is unavailable right now, try again shortly.</b>")
+    except Exception as e:
+        log.exception("Torrent search failed: %s", e)
+        await status_msg.edit_text(f"<b>Search error:</b> {e}")
 
 
 async def handle_torrent_search_callback(client: Client, callback: CallbackQuery) -> None:
@@ -153,7 +233,7 @@ async def handle_torrent_search_callback(client: Client, callback: CallbackQuery
             await callback.message.edit_text(formatted_html, disable_web_page_preview=True)
     except MagnetioRPCError as e:
         log.warning("Torrent search backend unavailable: %s", e)
-        await callback.message.edit_text("<b>⚠️ Search backend is unavailable right now, try again shortly.</b>")
+        await callback.message.edit_text("<b>Search backend is unavailable right now, try again shortly.</b>")
     except Exception as e:
         log.exception("Torrent search failed: %s", e)
         await callback.message.edit_text(f"<b>Search error:</b> {e}")

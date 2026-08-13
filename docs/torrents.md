@@ -34,15 +34,25 @@ Search for torrents across multiple providers directly within Telegram.
 
 ### Syntax
 ```text
-/ts <search_query>
-/torsearch <search_query>
-/search <search_query>
+/ts [provider_flags] <search_query>
+/torsearch [provider_flags] <search_query>
+/search [provider_flags] <search_query>
 ```
+
+### Supported Provider Flags
+Specify one or more provider flags to limit search to target indexers:
+- **Movie / Media Indexers**: `-yts`, `-tpb` / `-piratebay`, `-1337x` / `-leetx`, `-tgx` / `-torrentgalaxy`, `-kat` / `-kickass`, `-lime`, `-rarbg`, `-glo`
+- **Anime Indexers**: `-nyaa`, `-subsplease`, `-tosho` / `-animetosho`, `-neko`
+- **General / Russian Indexers**: `-bitsearch`, `-bt4g`, `-btdig`, `-torlock`, `-td`, `-eztv`, `-rutor`, `-rutracker`, `-torznab`
+- **Generic syntax**: `-p=<provider_id>` (e.g. `-p=yts`, `-p=thepiratebay`)
 
 ### Examples
 ```text
-/ts Ubuntu 24.04
-/search Blender 4.2
+/ts Avatar 2009                          # Search across all 22 enabled providers
+/ts -yts Inception                       # Search YTS provider only
+/ts -tpb -1337x Oppenheimer              # Search PirateBay and 1337x providers
+/search -nyaa Naruto Shippuden           # Search Nyaa anime provider only
+/torsearch -p=torrentgalaxy Dune Part 2  # Search TorrentGalaxy using generic flag
 ```
 
 ### Key Search Engine Features
