@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     ca-certificates \
+    git \
     ffmpeg \
     aria2 \
     unzip \
