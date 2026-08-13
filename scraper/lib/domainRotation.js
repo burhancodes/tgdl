@@ -80,11 +80,13 @@ export const PROVIDER_DOMAINS = {
     `https://limetorrents.${UNBLOCKIT}`,
   ],
   kickasstorrents: [
+    'https://kickasstorrents.bz',
     'https://katcr.to',
     'https://kickasstorrents.to',
     `https://kickasstorrents.${UNBLOCKIT}`,
   ],
   torrentgalaxy: [
+    'https://torrentgalaxy.info',
     'https://torrentgalaxy.one',
     'https://torrentgalaxy.to',
     `https://torrentgalaxy.${UNBLOCKIT}`,
