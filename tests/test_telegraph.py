@@ -245,7 +245,7 @@ async def test_telegraph_page_cinemeta_rendering():
         url = await helper.generate_telegraph_page(results, "Avatar", "Magnetio")
         assert url == "https://graph.org/avatar-search"
         content = mock_create_page.call_args.kwargs["content"]
-        assert "<img src='https://images.metahub.space/poster/small/tt0499549/img'>" in content
+        assert "<figure><img src='https://images.metahub.space/poster/small/tt0499549/img'></figure>" in content
         assert "<b>Avatar</b> (2009)" in content
         assert "⭐ 7.9/10" in content
         assert "Action, Sci-Fi" in content

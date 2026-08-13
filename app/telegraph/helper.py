@@ -49,10 +49,12 @@ async def fetch_cinemeta_info(query: str) -> dict[str, Any] | None:
                                             mdata = await mresp.json()
                                             meta = mdata.get("meta") if isinstance(mdata, dict) else None
                                             if meta and meta.get("name") and meta.get("poster"):
+                                                raw_poster = str(meta.get("poster") or "")
+                                                small_poster = raw_poster.replace("/poster/medium/", "/poster/small/").replace("/poster/large/", "/poster/small/")
                                                 res = {
                                                     "name": meta.get("name"),
                                                     "year": meta.get("year") or meta.get("releaseInfo"),
-                                                    "poster": meta.get("poster"),
+                                                    "poster": small_poster,
                                                     "description": meta.get("description"),
                                                     "rating": meta.get("imdbRating"),
                                                     "genres": meta.get("genres"),
@@ -248,7 +250,7 @@ class TelegraphHelper:
 
             header += "<hr>"
             if c_poster:
-                header += f"<img src='{c_poster}'><br>"
+                header += f"<figure><img src='{c_poster}'></figure>"
 
             title_line = f"<b>{c_name}</b>"
             if c_year:
