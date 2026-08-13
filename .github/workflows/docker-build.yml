@@ -35,6 +35,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Create dummy .env file for Compose
+        run: |
+          cp -n .env.example .env || touch .env
+
       - name: Build and Push Docker Compose Images
         env:
           REPO_NAME: ${{ github.repository }}
