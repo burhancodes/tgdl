@@ -22,7 +22,7 @@ fi
 
 # 2. Ensure data and logs volume directories exist with write permissions
 mkdir -p data logs
-chmod 777 data logs 2>/dev/null || true
+chmod -R 777 data logs 2>/dev/null || true
 
 # Default GHCR repository name
 REPO_PREFIX="${GHCR_REPO:-ghcr.io/burhancodes/tgdl}"

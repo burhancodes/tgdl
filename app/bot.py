@@ -97,8 +97,7 @@ async def log_upload(job_id: int, filename: str) -> None:
 async def main() -> None:
     setup_logging()
     settings.validate_credentials()
-    log.info("Starting TGDL Bot...")
-
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
     app = Client(
         "tgdl_bot",
         api_id=settings.tg_api_id,
