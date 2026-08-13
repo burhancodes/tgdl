@@ -218,3 +218,35 @@ async def test_telegraph_client_context_manager_and_new_methods():
             res_views = await client.get_views("test-path")
             assert res_views["views"] == 100
 
+
+@pytest.mark.asyncio
+async def test_telegraph_page_cinemeta_rendering():
+    from app.telegraph.helper import TelegraphHelper
+
+    mock_meta = {
+        "name": "Avatar",
+        "year": "2009",
+        "poster": "https://images.metahub.space/poster/small/tt0499549/img",
+        "description": "A paraplegic Marine dispatched to Pandora...",
+        "rating": "7.9",
+        "genres": ["Action", "Sci-Fi"],
+        "imdb_id": "tt0499549",
+        "type": "movie",
+    }
+
+    helper = TelegraphHelper()
+    results = [{"name": "Avatar 1080p", "size": "3 GB", "seeders": 50, "torrent": "https://example.com/t"}]
+
+    with patch("app.telegraph.helper.fetch_cinemeta_info", new_callable=AsyncMock) as mock_fetch, \
+         patch.object(helper, "create_page", new_callable=AsyncMock) as mock_create_page:
+        mock_fetch.return_value = mock_meta
+        mock_create_page.return_value = {"path": "avatar-search"}
+
+        url = await helper.generate_telegraph_page(results, "Avatar", "Magnetio")
+        assert url == "https://graph.org/avatar-search"
+        content = mock_create_page.call_args.kwargs["content"]
+        assert "<img src='https://images.metahub.space/poster/small/tt0499549/img'>" in content
+        assert "<b>Avatar</b> (2009)" in content
+        assert "⭐ 7.9/10" in content
+        assert "Action, Sci-Fi" in content
+        assert "A paraplegic Marine dispatched to Pandora..." in content

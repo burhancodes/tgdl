@@ -7,12 +7,68 @@ from asyncio import sleep
 from secrets import token_urlsafe
 from typing import Any
 
+import aiohttp
+
 from .client import Telegraph
 from .parser import RetryAfterError
 
 log = logging.getLogger(__name__)
 
 FALLBACK_DOMAINS = ["graph.org", "telegra.ph"]
+
+
+async def fetch_cinemeta_info(query: str) -> dict[str, Any] | None:
+    """Fetches movie/series metadata (poster, description, rating, genres) from Cinemeta for query."""
+    clean_query = query.strip().lower()
+    if not clean_query or len(clean_query) < 2:
+        return None
+
+    encoded = urllib.parse.quote(query.strip())
+    headers = {"User-Agent": "Mozilla/5.0"}
+    timeout = aiohttp.ClientTimeout(total=3.5)
+    best_candidate: dict[str, Any] | None = None
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            for mtype in ["movie", "series"]:
+                try:
+                    cat_url = f"https://v3-cinemeta.strem.io/catalog/{mtype}/top/search={encoded}.json"
+                    async with session.get(cat_url) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        metas = data.get("metas", []) if isinstance(data, dict) else []
+                        for item in metas[:5]:
+                            name = (item.get("name") or "").strip().lower()
+                            if name == clean_query or clean_query in name or name in clean_query:
+                                item_id = item.get("id")
+                                if item_id:
+                                    meta_url = f"https://v3-cinemeta.strem.io/meta/{mtype}/{item_id}.json"
+                                    async with session.get(meta_url) as mresp:
+                                        if mresp.status == 200:
+                                            mdata = await mresp.json()
+                                            meta = mdata.get("meta") if isinstance(mdata, dict) else None
+                                            if meta and meta.get("name") and meta.get("poster"):
+                                                res = {
+                                                    "name": meta.get("name"),
+                                                    "year": meta.get("year") or meta.get("releaseInfo"),
+                                                    "poster": meta.get("poster"),
+                                                    "description": meta.get("description"),
+                                                    "rating": meta.get("imdbRating"),
+                                                    "genres": meta.get("genres"),
+                                                    "imdb_id": item_id,
+                                                    "type": mtype,
+                                                }
+                                                if name == clean_query:
+                                                    return res
+                                                if not best_candidate:
+                                                    best_candidate = res
+                except Exception as exc:
+                    log.debug("Cinemeta lookup error for %s (%s): %s", query, mtype, exc)
+    except Exception as exc:
+        log.warning("Cinemeta request failed for query %s: %s", query, exc)
+
+    return best_candidate
 
 
 class TelegraphHelper:
@@ -174,9 +230,44 @@ class TelegraphHelper:
         safe_query = html.escape(query)
         safe_site = html.escape(site.capitalize())
 
+        # Attempt to fetch rich movie/series metadata from Cinemeta
+        meta_info = await fetch_cinemeta_info(query)
+
         telegraph_content: list[str] = []
-        header = f"<h3>Torrent Search Results: <code>{safe_query}</code></h3>"
-        header += f"<blockquote><b>Source:</b> {safe_site} &nbsp;•&nbsp; <b>Count:</b> {len(results)}</blockquote><hr>"
+        header = f"<h3>Search Results: <code>{safe_query}</code></h3>"
+        header += f"<blockquote><b>Source:</b> {safe_site} &nbsp;•&nbsp; <b>Count:</b> {len(results)}</blockquote>"
+
+        if meta_info:
+            c_name = html.escape(str(meta_info.get("name") or query))
+            c_year = html.escape(str(meta_info.get("year") or ""))
+            c_rating = html.escape(str(meta_info.get("rating") or ""))
+            c_desc = html.escape(str(meta_info.get("description") or ""))
+            c_poster = html.escape(str(meta_info.get("poster") or ""), quote=True)
+            genres_list = meta_info.get("genres") or []
+            c_genres = html.escape(", ".join(genres_list)) if isinstance(genres_list, list) else ""
+
+            header += "<hr>"
+            if c_poster:
+                header += f"<img src='{c_poster}'><br>"
+
+            title_line = f"<b>{c_name}</b>"
+            if c_year:
+                title_line += f" ({c_year})"
+            header += f"<h3>{title_line}</h3>"
+
+            meta_details = []
+            if c_rating:
+                meta_details.append(f"<b>IMDb Rating:</b> ⭐ {c_rating}/10")
+            if c_genres:
+                meta_details.append(f"<b>Genres:</b> {c_genres}")
+
+            if meta_details:
+                header += f"<p>{' &nbsp;•&nbsp; '.join(meta_details)}</p>"
+
+            if c_desc:
+                header += f"<blockquote>{c_desc}</blockquote>"
+
+        header += "<hr>"
         current_msg = header
 
         for idx, result in enumerate(results, start=1):
