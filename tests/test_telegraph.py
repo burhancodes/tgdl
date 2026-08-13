@@ -250,3 +250,32 @@ async def test_telegraph_page_cinemeta_rendering():
         assert "⭐ 7.9/10" in content
         assert "Action, Sci-Fi" in content
         assert "A paraplegic Marine dispatched to Pandora..." in content
+
+
+@pytest.mark.asyncio
+async def test_telegraph_page_provider_hyperlink():
+    from app.telegraph.helper import TelegraphHelper
+
+    helper = TelegraphHelper()
+    results = [
+        {
+            "name": "Ubuntu 22.04 ISO",
+            "size": "3.5 GB",
+            "seeders": 120,
+            "magnet": "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678",
+            "torrent": "https://thepiratebay.org/description.php?id=123",
+            "provider": "ThePirateBay",
+        }
+    ]
+
+    with patch("app.telegraph.helper.fetch_cinemeta_info", new_callable=AsyncMock) as mock_fetch, \
+         patch.object(helper, "create_page", new_callable=AsyncMock) as mock_create_page:
+        mock_fetch.return_value = None
+        mock_create_page.return_value = {"path": "piratebay-test"}
+
+        url = await helper.generate_telegraph_page(results, "Ubuntu", "Magnetio")
+        assert url == "https://graph.org/piratebay-test"
+        content = mock_create_page.call_args.kwargs["content"]
+        assert "Share Magnet" in content
+        assert "<a href='https://thepiratebay.org/description.php?id=123'>ThePirateBay</a>" in content
+

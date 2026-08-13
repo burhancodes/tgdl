@@ -286,12 +286,26 @@ class TelegraphHelper:
             if raw_magnet_link:
                 quoted_mag = html.escape(urllib.parse.quote(raw_magnet_link), quote=True)
                 links_html.append(f"<a href='http://t.me/share/url?url={quoted_mag}'>Share Magnet</a>")
-            if raw_torrent_link and raw_torrent_link != "#" and not raw_torrent_link.startswith("magnet:"):
+
+            # Determine provider label (e.g. "ThePirateBay")
+            provider_val = result.get("provider") or result.get("site") or result.get("indexer")
+            if provider_val and str(provider_val).strip().lower() not in ("unknown", "none", ""):
+                site_label = str(provider_val).strip()
+            elif raw_torrent_link and raw_torrent_link != "#" and not raw_torrent_link.startswith("magnet:"):
                 parsed_url = urllib.parse.urlparse(raw_torrent_link)
                 domain_text = parsed_url.hostname or parsed_url.netloc or "Direct Link"
-                domain_text = domain_text.removeprefix("www.")
-                safe_domain = html.escape(domain_text)
-                links_html.append(f"<a href='{safe_torrent_link}'>{safe_domain}</a>")
+                site_label = domain_text.removeprefix("www.")
+            else:
+                site_label = "Source"
+
+            safe_site_label = html.escape(site_label)
+            target_link = raw_torrent_link if (raw_torrent_link and raw_torrent_link != "#") else raw_magnet_link
+
+            if target_link and target_link != "#":
+                safe_target_link = html.escape(target_link, quote=True)
+                links_html.append(f"<a href='{safe_target_link}'>{safe_site_label}</a>")
+            else:
+                links_html.append(f"<b>{safe_site_label}</b>")
 
             if links_html:
                 item_html += f"<blockquote>{' &nbsp;•&nbsp; '.join(links_html)}</blockquote>"
