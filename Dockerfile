@@ -7,6 +7,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install media tools, torrent client, archive extraction libraries, and curl/ca-certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
+    python3-dev \
+    build-essential \
     ca-certificates \
     git \
     ffmpeg \
