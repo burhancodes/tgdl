@@ -6,6 +6,7 @@ services:
       - redis-data:/data
 
   magnetio-scraper:
+    image: ${SCRAPER_IMAGE:-ghcr.io/burhanverse/tgdl-bot/magnetio-scraper:latest}
     build:
       context: ./scraper
       dockerfile: Dockerfile
@@ -26,6 +27,7 @@ services:
       start_period: 5s
 
   tgdl-bot:
+    image: ${BOT_IMAGE:-ghcr.io/burhanverse/tgdl-bot/tgdl-bot:latest}
     build: .
     env_file: .env
     depends_on:
