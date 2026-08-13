@@ -1,10 +1,11 @@
 /**
  * Nyaa provider — uses Nyaa.si RSS/JSON for anime torrents.
  */
-import * as cheerio from 'cheerio';
+import { parseFeed } from '../lib/feedHelper.js';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { logger } from '../lib/logger.js';
+import { parseSize } from '../lib/magnetHelper.js';
 
 const BASE = 'https://nyaa.si';
 
@@ -28,23 +29,27 @@ export async function scrape(meta) {
         s:   'seeders',
         o:   'desc',
       },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
 
-    const $ = cheerio.load(data, { xmlMode: true });
+    const items = await parseFeed(data);
     const results = [];
 
-    $('item').each((_, item) => {
-      const $item   = $(item);
-      const title   = $item.find('title').text().trim();
-      const magnet  = $item.find('link').text().trim() || $item.find('nyaa\\:infoHash').text().trim();
-      const infoHash = $item.find('nyaa\\:infoHash').text().trim().toLowerCase()
-        || extractInfoHash($item.find('link').text());
+    for (const item of items) {
+      const title = item.title ? item.title.trim() : '';
+      const magnet = item.link || (item['nyaa:infohash'] ? item['nyaa:infohash']['#'] : '');
+      const infoHash = (item['nyaa:infohash'] ? item['nyaa:infohash']['#'] : null)
+        || extractInfoHash(magnet);
 
-      if (!infoHash || !title) return;
+      if (!infoHash || !title) continue;
 
-      const seeders  = parseInt($item.find('nyaa\\:seeders').text().trim(), 10) || 0;
-      const leechers = parseInt($item.find('nyaa\\:leechers').text().trim(), 10) || 0;
-      const size     = parseInt($item.find('nyaa\\:size').text().trim(), 10) || 0;
+      const seeders = parseInt(item['nyaa:seeders'] ? item['nyaa:seeders']['#'] : 0, 10) || 0;
+      const leechers = parseInt(item['nyaa:leechers'] ? item['nyaa:leechers']['#'] : 0, 10) || 0;
+      
+      const sizeStr = item['nyaa:size'] ? item['nyaa:size']['#'].trim().replace(/iB/gi, 'B') : '';
+      const size = parseSize(sizeStr) || parseInt(sizeStr, 10) || 0;
 
       results.push({
         infoHash,
@@ -57,7 +62,7 @@ export async function scrape(meta) {
         languages: ['ja'],
         ...parseTitle(title),
       });
-    });
+    }
 
     return results;
   } catch (err) {

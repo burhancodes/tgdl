@@ -2,15 +2,15 @@
  * AnimeTosho provider -- uses the Atom/RSS feed for anime torrents.
  * Aggregates results from Nyaa, TokyoTosho, and other anime trackers.
  */
-import * as cheerio from 'cheerio';
+import { parseFeed } from '../lib/feedHelper.js';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { extractInfoHash, parseSize } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
-const FEED_BASE = 'https://feed.animetosho.org';
+const FEED_BASE = 'https://feed.animetosho.xyz';
 
-export const id   = 'animetosho';
+export const id = 'animetosho';
 export const name = 'AnimeTosho';
 
 export async function scrape(meta) {
@@ -23,27 +23,24 @@ export async function scrape(meta) {
     const { data } = await get(`${FEED_BASE}/rss2`, {
       limiterKey: 'animetosho',
       params: {
-        q:  query,
+        q: query,
         qx: 1,
         only_tor: 1,
       },
     });
 
-    const $ = cheerio.load(data, { xmlMode: true });
+    const items = await parseFeed(data);
     const results = [];
 
-    $('item').each((_, item) => {
-      const $item = $(item);
-      const title = $item.find('title').text().trim();
-      if (!title) return;
+    for (const item of items) {
+      const title = item.title ? item.title.trim() : '';
+      if (!title) continue;
 
-      // Extract infoHash from the magnet link in the description or link
-      const desc = $item.find('description').text() || '';
-      const link = $item.find('link').text().trim() || '';
+      const desc = item.description || '';
+      const link = item.link || '';
 
       let infoHash = null;
 
-      // Try magnet link extraction from description or link
       const magnetMatch = desc.match(/magnet:\?[^\s"<]+/i)
         || link.match(/magnet:\?[^\s"<]+/i);
 
@@ -51,15 +48,13 @@ export async function scrape(meta) {
         infoHash = extractInfoHash(magnetMatch[0]);
       }
 
-      // Try torrent filename hash (animetosho stores torrents as /storage/torrent/{hash}/...)
       if (!infoHash) {
         const torrentMatch = desc.match(/\/storage\/torrent\/([a-fA-F0-9]{40})\//i);
         if (torrentMatch) infoHash = torrentMatch[1].toLowerCase();
       }
 
-      if (!infoHash) return;
+      if (!infoHash) continue;
 
-      // Parse seeders/leechers from description brackets like [515/59]
       let seeders = 0;
       let leechers = 0;
       const statsMatch = desc.match(/\[(\d+)[^\/]*\/(\d+)/);
@@ -68,12 +63,11 @@ export async function scrape(meta) {
         leechers = parseInt(statsMatch[2], 10) || 0;
       }
 
-      // Parse size from enclosure or description
       let size = 0;
-      const encLength = $item.find('enclosure').attr('length');
-      if (encLength) {
-        size = parseInt(encLength, 10) || 0;
+      if (item.enclosures && item.enclosures.length > 0) {
+        size = parseInt(item.enclosures[0].length, 10) || 0;
       }
+      
       if (!size) {
         const sizeMatch = desc.match(/([\d.]+)\s*(GB|MB|TB|KB)/i);
         if (sizeMatch) {
@@ -92,7 +86,7 @@ export async function scrape(meta) {
         imdbId:    meta.imdbId,
         languages: ['ja'],
       });
-    });
+    }
 
     return results;
   } catch (err) {
