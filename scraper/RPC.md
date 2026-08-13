@@ -1,35 +1,37 @@
 # Magnetio Scraper JSON-RPC 2.0 API Specification
 
-The Magnetio scraper sidecar exposes a JSON-RPC 2.0 endpoint at `POST /rpc`.
-
-## Authentication
-
-If `RPC_SHARED_SECRET` environment variable is set on the scraper service, all JSON-RPC calls must include authorization:
-- HTTP Header: `Authorization: Bearer <RPC_SHARED_SECRET>`
-- OR request param: `"secret": "<RPC_SHARED_SECRET>"`
-
-If authorization fails or is missing, the response will be a JSON-RPC error with code `-32001` ("Unauthorized").
+The Magnetio scraper sidecar exposes a **JSON-RPC 2.0** endpoint at `POST /rpc`.
 
 ---
 
-## Methods
+## Authentication
 
-### `torrent.search`
+If the `RPC_SHARED_SECRET` environment variable is configured on the scraper service, all incoming JSON-RPC calls must include a valid secret:
+- **HTTP Header**: `Authorization: Bearer <RPC_SHARED_SECRET>`
+- **OR Request Parameter**: `"secret": "<RPC_SHARED_SECRET>"` inside the JSON-RPC `params` object.
 
-Scrapes enabled torrent providers for free-text or structured media queries.
+If authorization fails or is missing when `RPC_SHARED_SECRET` is set, the endpoint returns a JSON-RPC error with code `-32001` ("Unauthorized"). If `RPC_SHARED_SECRET` is unset, authentication is disabled.
+
+---
+
+## JSON-RPC 2.0 Methods
+
+### 1. `torrent.search`
+
+Scrapes enabled torrent providers in parallel and returns a deduplicated list of torrent results with pre-built magnet URIs.
 
 #### Parameters
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `query` | `string` | **Yes** | Search terms |
-| `type` | `string` | No | `"movie"` (default), `"series"`, or `"anime"` |
-| `year` | `number` | No | Release year |
-| `season` | `number` | No | Season number (for series) |
-| `episode` | `number` | No | Episode number (for series) |
-| `providers` | `string[]` | No | List of provider IDs to scrape (e.g. `["thepiratebay", "yts"]`). Scrapes all providers if omitted |
-| `limit` | `number` | No | Maximum number of results to return |
-| `strict` | `boolean` | No | Default `false` in JSON-RPC `torrent.search` (allows broad free-text matching). Set to `true` to enforce strict title phrase matching (default in REST `/streams` route). |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `query` | `string` | **Yes** | — | Free-text search terms |
+| `type` | `string` | No | `"movie"` | Content type filter: `"movie"`, `"series"`, or `"anime"` |
+| `year` | `number` | No | `null` | Release year filter |
+| `season` | `number` | No | `null` | Season number (for series) |
+| `episode` | `number` | No | `null` | Episode number (for series) |
+| `providers` | `string[]` | No | `null` | Whitelist of provider IDs (e.g. `["thepiratebay", "yts"]`). Scrapes all 22 providers if omitted |
+| `limit` | `number` | No | `null` | Maximum number of results to return |
+| `strict` | `boolean` | No | `false` | Default `false` in JSON-RPC (allows broad free-text phrase matching). Set to `true` to enforce strict title phrase matching (default in REST `/streams` route) |
 
 #### Example Request
 
@@ -38,7 +40,7 @@ Scrapes enabled torrent providers for free-text or structured media queries.
   "jsonrpc": "2.0",
   "method": "torrent.search",
   "params": {
-    "query": "Ubuntu 22.04",
+    "query": "Ubuntu 24.04",
     "limit": 10,
     "strict": false
   },
@@ -56,7 +58,7 @@ Scrapes enabled torrent providers for free-text or structured media queries.
     "count": 1,
     "torrents": [
       {
-        "title": "ubuntu-22.04.3-desktop-amd64.iso",
+        "title": "ubuntu-24.04-desktop-amd64.iso",
         "infoHash": "45a305e26090e543666b6cfa45d6541f486431bd",
         "seeders": 150,
         "leechers": 10,
@@ -66,7 +68,7 @@ Scrapes enabled torrent providers for free-text or structured media queries.
         "codec": null,
         "source": null,
         "languages": [],
-        "magnet": "magnet:?xt=urn:btih:45a305e26090e543666b6cfa45d6541f486431bd&dn=ubuntu-22.04.3-desktop-amd64.iso&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+        "magnet": "magnet:?xt=urn:btih:45a305e26090e543666b6cfa45d6541f486431bd&dn=ubuntu-24.04-desktop-amd64.iso&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
       }
     ]
   }
@@ -75,9 +77,9 @@ Scrapes enabled torrent providers for free-text or structured media queries.
 
 ---
 
-### `torrent.providers`
+### 2. `torrent.providers`
 
-Lists all available provider scrapers.
+Returns the list of all 22 available provider scrapers (id and display name).
 
 #### Example Request
 
@@ -99,7 +101,11 @@ Lists all available provider scrapers.
     "providers": [
       { "id": "thepiratebay", "name": "ThePirateBay" },
       { "id": "yts", "name": "YTS" },
-      { "id": "nyaa", "name": "Nyaa" }
+      { "id": "leetx", "name": "1337x" },
+      { "id": "torrentgalaxy", "name": "TorrentGalaxy" },
+      { "id": "nyaa", "name": "Nyaa" },
+      { "id": "limetorrents", "name": "LimeTorrents" },
+      { "id": "bitsearch", "name": "Bitsearch" }
     ]
   }
 }
@@ -107,9 +113,9 @@ Lists all available provider scrapers.
 
 ---
 
-### `torrent.health`
+### 3. `torrent.health`
 
-Returns liveness and service status information.
+Returns service liveness and version status.
 
 #### Example Request
 
@@ -139,7 +145,7 @@ Returns liveness and service status information.
 
 ## Batch Requests
 
-Standard JSON-RPC 2.0 batch array requests are fully supported:
+Standard JSON-RPC 2.0 batch array requests are supported. The server returns an array of response objects:
 
 ```json
 [
@@ -150,13 +156,47 @@ Standard JSON-RPC 2.0 batch array requests are fully supported:
 
 ---
 
-## Sidecar Timing & Concurrency Configuration
+## Error Handling & Error Codes
 
-The scraper sidecar waits for all enabled providers to finish scraping (or hit individual/hard timeouts) before returning results:
+The RPC service returns standard JSON-RPC 2.0 error objects `{ code, message }` on failure:
+
+| Error Code | Message | Cause |
+|---|---|---|
+| `-32700` | Parse error | Invalid JSON body payload |
+| `-32600` | Invalid Request | Missing or invalid `jsonrpc: "2.0"` framing |
+| `-32601` | Method not found | Unknown method string |
+| `-32602` | Invalid params | Missing required `query` parameter |
+| `-32603` | Internal error | Unhandled runtime exception in scraper |
+| `-32001` | Unauthorized | Mismatched or missing secret token when `RPC_SHARED_SECRET` is set |
+
+---
+
+## Environment Variables & Concurrency Configuration
+
+The scraper sidecar uses the following environment variables:
 
 | Environment Variable | Default Value | Description |
 |---|---|---|
+| `PORT` | `8080` | HTTP server listening port |
+| `RPC_SHARED_SECRET` | `null` | Shared secret token for `/rpc` authorization |
+| `REDIS_URI` / `REDIS_URL` | `null` | Optional Redis URI (`redis://...`). Falls back gracefully to in-memory `Keyv` cache if unset or unreachable |
+| `CACHE_TTL_STREAMS` | `3600` | Stream result cache TTL in seconds |
+| `SCRAPER_CONCURRENCY` | `12` | Max concurrent provider scrapers (`p-limit`) |
 | `SCRAPER_PROVIDER_TIMEOUT_MS` | `20000` (20s) | Per-provider scrape timeout |
 | `SCRAPER_HARD_TIMEOUT_MS` | `30000` (30s) | Hard cutoff deadline for all providers in `scrapeAll()` |
 
+---
 
+## Curl Test Example
+
+```bash
+curl -X POST http://localhost:8080/rpc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your_rpc_secret_here" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "torrent.search",
+    "params": { "query": "Ubuntu", "limit": 5 },
+    "id": 1
+  }'
+```
