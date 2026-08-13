@@ -1,9 +1,9 @@
 import { logger } from './logger.js';
 
 const domainHealth = new Map();
-const DEFAULT_COOLDOWN_MS    = 5 * 60 * 1000;
-const DEFAULT_RATELIMIT_MS   = 10 * 60 * 1000;
-const COOLDOWN_MS  = parseInt(process.env.SCRAPER_DOMAIN_COOLDOWN_MS  ?? String(DEFAULT_COOLDOWN_MS),  10);
+const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_RATELIMIT_MS = 10 * 60 * 1000;
+const COOLDOWN_MS = parseInt(process.env.SCRAPER_DOMAIN_COOLDOWN_MS ?? String(DEFAULT_COOLDOWN_MS), 10);
 const RATELIMIT_MS = parseInt(process.env.SCRAPER_RATELIMIT_COOLDOWN_MS ?? String(DEFAULT_RATELIMIT_MS), 10);
 
 function cooldownFor(reason) {
@@ -90,6 +90,8 @@ export const PROVIDER_DOMAINS = {
     `https://torrentgalaxy.${UNBLOCKIT}`,
   ],
   yts: [
+    'https://yts.gg',
+    'https://movies-api.accel.li',
     'https://yts.do',
     'https://yts.mx',
     `https://yts.${UNBLOCKIT}`,
