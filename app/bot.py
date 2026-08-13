@@ -63,11 +63,15 @@ def setup_logging() -> None:
     console.setFormatter(fmt)
     root.addHandler(console)
 
-    file_handler = logging.handlers.RotatingFileHandler(
-        settings.log_dir / "bot.log", maxBytes=10_000_000, backupCount=5
-    )
-    file_handler.setFormatter(fmt)
-    root.addHandler(file_handler)
+    try:
+        settings.log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            settings.log_dir / "bot.log", maxBytes=10_000_000, backupCount=5
+        )
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+    except Exception as exc:
+        logging.warning("Could not initialize file logging at %s: %s. Falling back to console logging.", settings.log_dir / "bot.log", exc)
 
     if level_str != "DEBUG":
         logging.getLogger("pyrogram").setLevel(logging.WARNING)
