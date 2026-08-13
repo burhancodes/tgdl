@@ -69,14 +69,23 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Docker Deployment
 
-Deploy using Docker Compose for containerized execution (automatically builds and networks both `magnetio-scraper` and `tgdl-bot`).
+Deploy using Docker Compose or the pre-built GHCR images.
 
+### Quick Start with GHCR Images (`./start-docker.sh`)
+Run the Docker launcher script to pull the latest images from GHCR (`ghcr.io/burhancodes/tgdl`) and spin up the complete stack:
+
+```bash
+./start-docker.sh
+```
+
+### Manual Docker Compose Launch
 1. Configure `.env` file as shown above (`MAGNETIO_RPC_URL=http://magnetio-scraper:8080/rpc`).
-2. Build and start containers:
+2. Pull latest images and start containers:
    ```bash
-   docker compose up -d --build
+   docker compose pull
+   docker compose up -d
    ```
-3. View logs:
+3. View live container logs:
    ```bash
    docker compose logs -f
    ```
