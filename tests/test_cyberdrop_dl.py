@@ -124,3 +124,56 @@ async def test_run_with_progress_missing_binary(tmp_path: Path):
     with patch("app.downloader.cyberdrop_dl.core._find_cdl_binary", return_value=[]):
         with pytest.raises(CyberdropDLNotFound):
             await run_with_progress("https://example.com/test", tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_gallery_dl_per_url_immediate_fallback(tmp_path: Path):
+    from app.downloader.gallery_dl.core import run_with_progress as run_gdl
+
+    dest = tmp_path / "downloads"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    urls = ["https://example.com/fail_gdl", "https://example.com/success_gdl"]
+
+    # Mock gallery-dl subprocess: fails on url 1, succeeds on url 2
+    async def mock_gdl_subprocess(*args, **kwargs):
+        called_cmd = list(args)
+        proc = MagicMock()
+        target_url = called_cmd[-1] if called_cmd else ""
+
+        if "fail_gdl" in target_url:
+            proc.returncode = 1
+            proc.wait = AsyncMock(return_value=1)
+            async def mock_out():
+                if False:
+                    yield b""
+            async def mock_err():
+                yield b"ERROR: Unsupported URL\n"
+        else:
+            proc.returncode = 0
+            proc.wait = AsyncMock(return_value=0)
+            async def mock_out():
+                (dest / "gdl_success.jpg").write_bytes(b"gdl")
+                yield b"Completed: gdl_success.jpg\n"
+            async def mock_err():
+                if False:
+                    yield b""
+        proc.stdout = mock_out()
+        proc.stderr = mock_err()
+        return proc
+
+    # Mock cyberdrop-dl for fallback: succeeds on fail_gdl
+    async def mock_cdl_run(url, dest_dir, **kwargs):
+        (dest_dir / "cdl_fallback.jpg").write_bytes(b"cdl")
+        return DownloadResult(ok=True, files=[dest_dir / "cdl_fallback.jpg"])
+
+    with patch("shutil.which", return_value="/usr/bin/gallery-dl"), \
+         patch("asyncio.create_subprocess_exec", side_effect=mock_gdl_subprocess), \
+         patch("app.downloader.cyberdrop_dl.run_with_progress", side_effect=mock_cdl_run) as mock_cdl_fallback:
+
+        res = await run_gdl(urls, dest)
+        assert res.ok is True
+        assert len(res.files) == 2
+        # Assert CDL was called immediately for URL 1
+        assert mock_cdl_fallback.call_count == 1
+        assert "fail_gdl" in mock_cdl_fallback.call_args_list[0][0][0]

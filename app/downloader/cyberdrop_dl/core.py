@@ -141,6 +141,7 @@ async def run_with_progress(
     register_proc: Callable[[asyncio.subprocess.Process | None], None] | None = None,
     user_id: int | str | None = None,
     config_path: Path | None = None,
+    fallback_gdl: bool = True,
 ) -> DownloadResult:
     binary_cmd = _find_cdl_binary()
     if not binary_cmd or (len(binary_cmd) == 1 and not shutil.which(binary_cmd[0]) and not Path(binary_cmd[0]).exists()):
@@ -201,131 +202,170 @@ async def run_with_progress(
             except Exception as e:
                 log.debug("Progress callback error in cyberdrop_dl loop: %s", e)
 
-        backoff = Backoff(
-            base_s=settings.cdl_backoff_base_s,
-            multiplier=settings.cdl_backoff_multiplier,
-            max_attempts=settings.cdl_max_run_retries,
+        files_before = set(p for p in dest_dir.rglob("*") if p.is_file())
+        attempts += 1
+        cmd = _build_cmd(
+            [single_url],
+            dest_dir,
+            extra_args=extra_args,
+            config_path=config_path,
+            user_id=user_id,
+        )
+        log.info(
+            "cyberdrop-dl run url %s/%s attempt=%s url=%s args=%s user_id=%s",
+            idx, total_urls, attempts, single_url, extra_args, user_id,
         )
 
-        while True:
-            attempts += 1
-            cmd = _build_cmd(
-                [single_url],
-                dest_dir,
-                extra_args=extra_args,
-                config_path=config_path,
-                user_id=user_id,
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            log.info(
-                "cyberdrop-dl run url %s/%s attempt=%s url=%s args=%s user_id=%s",
-                idx, total_urls, attempts, single_url, extra_args, user_id,
-            )
+        except FileNotFoundError:
+            raise CyberdropDLNotFound("cyberdrop-dl executable not found on the system.")
 
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
-            except FileNotFoundError:
-                raise CyberdropDLNotFound("cyberdrop-dl executable not found on the system.")
+        if register_proc:
+            register_proc(proc)
 
-            if register_proc:
-                register_proc(proc)
+        count = 0
+        stdout_buf: list[str] = []
+        stderr_buf: list[str] = []
 
-            count = 0
-            stdout_buf: list[str] = []
-            stderr_buf: list[str] = []
+        async def pump_stdout():
+            nonlocal count
+            assert proc.stdout is not None
+            async for line in proc.stdout:
+                text = line.decode(errors="replace").strip()
+                if not text:
+                    continue
+                stdout_buf.append(text)
+                if len(stdout_buf) > 300:
+                    stdout_buf.pop(0)
 
-            async def pump_stdout():
-                nonlocal count
-                assert proc.stdout is not None
-                async for line in proc.stdout:
-                    text = line.decode(errors="replace").strip()
-                    if not text:
-                        continue
-                    stdout_buf.append(text)
-                    if len(stdout_buf) > 300:
-                        stdout_buf.pop(0)
+                filename = None
+                m_lock = _FILE_LOCK_PATTERN.search(text)
+                if m_lock:
+                    filename = m_lock.group(1).strip()
 
-                    filename = None
-                    m_lock = _FILE_LOCK_PATTERN.search(text)
-                    if m_lock:
-                        filename = m_lock.group(1).strip()
+                m_done = _DOWNLOAD_COMPLETE_PATTERN.search(text)
+                if m_done:
+                    filename = m_done.group(1).strip()
+                    count += 1
 
-                    m_done = _DOWNLOAD_COMPLETE_PATTERN.search(text)
-                    if m_done:
-                        filename = m_done.group(1).strip()
-                        count += 1
-
-                    if "Download attempt" in text or "Downloading" in text or filename:
-                        if on_progress:
+                if "Download attempt" in text or "Downloading" in text or filename:
+                    if on_progress:
+                        try:
+                            on_progress(total_download_count + count, filename, single_url)
+                        except TypeError:
                             try:
-                                on_progress(total_download_count + count, filename, single_url)
+                                on_progress(total_download_count + count, filename)
                             except TypeError:
-                                try:
-                                    on_progress(total_download_count + count, filename)
-                                except TypeError:
-                                    on_progress(total_download_count + count)
+                                on_progress(total_download_count + count)
 
-            async def pump_stderr():
-                assert proc.stderr is not None
-                async for line in proc.stderr:
-                    stderr_buf.append(line.decode(errors="replace"))
-                    if len(stderr_buf) > 200:
-                        stderr_buf.pop(0)
+        async def pump_stderr():
+            assert proc.stderr is not None
+            async for line in proc.stderr:
+                stderr_buf.append(line.decode(errors="replace"))
+                if len(stderr_buf) > 200:
+                    stderr_buf.pop(0)
 
+        try:
+            await asyncio.gather(pump_stdout(), pump_stderr())
+            returncode = await proc.wait()
+        except asyncio.CancelledError:
             try:
-                await asyncio.gather(pump_stdout(), pump_stderr())
-                returncode = await proc.wait()
-            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            raise
+        finally:
+            if register_proc:
+                register_proc(None)
+
+        combined_output = "\n".join(stdout_buf) + "\n" + "".join(stderr_buf)
+        last_stderr = "".join(stderr_buf)[-3000:] or combined_output[-3000:]
+
+        files_after = set(p for p in dest_dir.rglob("*") if p.is_file())
+        new_files = files_after - files_before
+
+        cur_files = [p for p in dest_dir.rglob("*") if p.is_file()]
+        m_downloaded = _DOWNLOADED_COUNT_PATTERN.search(combined_output)
+        m_failed = _FAILED_COUNT_PATTERN.search(combined_output)
+        files_downloaded_stat = int(m_downloaded.group(1)) if m_downloaded else len(new_files)
+        files_failed_stat = int(m_failed.group(1)) if m_failed else 0
+
+        url_success = (returncode == 0 and (len(new_files) > 0 or files_downloaded_stat > 0 or len(cur_files) > 0) and files_failed_stat == 0)
+
+        if url_success:
+            success_count += 1
+            total_download_count += max(count, files_downloaded_stat, len(new_files), len(cur_files))
+            if on_progress:
                 try:
-                    proc.kill()
-                    await proc.wait()
+                    on_progress(total_download_count, None, single_url)
                 except Exception:
                     pass
-                raise
-            finally:
-                if register_proc:
-                    register_proc(None)
+        else:
+            log.info("cyberdrop-dl failed or produced 0 files for URL %s (code=%s).", single_url, returncode)
+            fallback_handled = False
+            if fallback_gdl:
+                log.info("Immediately passing failed URL %s to gallery-dl...", single_url)
+                try:
+                    from ..gallery_dl import run_with_progress as run_gdl_progress
 
-            combined_output = "\n".join(stdout_buf) + "\n" + "".join(stderr_buf)
-            last_stderr = "".join(stderr_buf)[-3000:] or combined_output[-3000:]
+                    def on_gdl_item_progress(gdl_count, gdl_filename=None, gdl_url=None):
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count + gdl_count, gdl_filename, single_url)
+                            except Exception:
+                                pass
 
-            # Scan destination directory to check if files were downloaded
-            cur_files = [p for p in dest_dir.rglob("*") if p.is_file()]
+                    gdl_res = await run_gdl_progress(
+                        single_url,
+                        dest_dir,
+                        on_progress=on_gdl_item_progress,
+                        extra_args=extra_args,
+                        register_proc=register_proc,
+                        user_id=user_id,
+                        fallback_cdl=False,
+                    )
+                    gdl_files_after = set(p for p in dest_dir.rglob("*") if p.is_file())
+                    gdl_new_files = gdl_files_after - files_before
+                    if gdl_res.ok and (len(gdl_new_files) > 0 or len(gdl_files_after) > 0):
+                        success_count += 1
+                        total_download_count += max(len(gdl_new_files), len(gdl_res.files))
+                        fallback_handled = True
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count, None, single_url)
+                            except Exception:
+                                pass
+                except Exception as gdl_err:
+                    log.warning("gallery-dl fallback error for URL %s: %s", single_url, gdl_err)
 
-            # Determine success based on exit code, files downloaded, or output stats
-            m_downloaded = _DOWNLOADED_COUNT_PATTERN.search(combined_output)
-            m_failed = _FAILED_COUNT_PATTERN.search(combined_output)
-            files_downloaded_stat = int(m_downloaded.group(1)) if m_downloaded else len(cur_files)
-            files_failed_stat = int(m_failed.group(1)) if m_failed else 0
+            if not fallback_handled:
+                log.info("Attempting DirectDownloader fallback for URL %s...", single_url)
+                from ..direct import download_direct
+                try:
+                    async def on_direct_prog(current_bytes, total_bytes, filename, direct_u=None):
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count + 1, filename, single_url)
+                            except Exception:
+                                pass
 
-            url_success = (returncode == 0 and (len(cur_files) > 0 or files_downloaded_stat > 0) and files_failed_stat == 0)
-            if not url_success and len(cur_files) > 0 and returncode == 0:
-                url_success = True
-
-            if url_success:
-                success_count += 1
-                total_download_count += max(count, files_downloaded_stat, len(cur_files))
-                if on_progress:
-                    try:
-                        on_progress(total_download_count, None, single_url)
-                    except Exception:
-                        pass
-                break
-
-            rate_limited = looks_rate_limited(last_stderr)
-            if not rate_limited or backoff.exhausted:
-                log.error("cyberdrop-dl failed for URL %s: %s", single_url, last_stderr)
-                break
-
-            delay = backoff.next_delay()
-            log.warning(
-                "cyberdrop-dl looks rate-limited (attempt %s), backing off %.0fs before retry",
-                attempts, delay,
-            )
-            await asyncio.sleep(delay)
-            last_stderr = ""
+                    direct_paths = await download_direct(single_url, dest_dir, progress_cb=on_direct_prog)
+                    if direct_paths:
+                        success_count += 1
+                        total_download_count += len(direct_paths)
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count, None, single_url)
+                            except Exception:
+                                pass
+                except Exception as de:
+                    log.warning("DirectDownloader fallback also failed for URL %s: %s", single_url, de)
 
     files = sorted(p for p in dest_dir.rglob("*") if p.is_file())
     ok = (success_count == total_urls and len(files) > 0) or (len(files) > 0)
+    return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)
     return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)

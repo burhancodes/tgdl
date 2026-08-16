@@ -140,13 +140,14 @@ async def _stream_run(cmd: list[str]) -> tuple[int, str, Callable[[], int]]:
 
 
 async def run_with_progress(
-    url: str,
+    url: str | list[str],
     dest_dir: Path,
-    on_progress: Callable[[int, str | None], None] | None = None,
+    on_progress: Callable[[int, str | None, str | None], None] | None = None,
     extra_args: list[str] | None = None,
-    register_proc: Callable[[asyncio.subprocess.Process], None] | None = None,
+    register_proc: Callable[[asyncio.subprocess.Process | None], None] | None = None,
     user_id: int | str | None = None,
     config_path: Path | None = None,
+    fallback_cdl: bool = True,
 ) -> DownloadResult:
 
     if shutil.which("gallery-dl") is None:
@@ -188,94 +189,149 @@ async def run_with_progress(
             except Exception as e:
                 log.debug("Progress callback error in gallery_dl loop: %s", e)
 
-        backoff = Backoff(
-            base_s=settings.gdl_backoff_base_s,
-            multiplier=settings.gdl_backoff_multiplier,
-            max_attempts=settings.gdl_max_run_retries,
+        files_before = set(p for p in dest_dir.rglob("*") if p.is_file())
+        attempts += 1
+        cmd = _build_cmd(
+            [single_url],
+            dest_dir,
+            extra_args,
+            links_file=None,
+            config_path=config_path,
+            user_id=user_id,
         )
+        log.info("gallery-dl run url %s/%s attempt=%s url=%s args=%s user_id=%s", idx, total_urls, attempts, single_url, extra_args, user_id)
 
-        while True:
-            attempts += 1
-            cmd = _build_cmd(
-                [single_url],
-                dest_dir,
-                extra_args,
-                links_file=None,
-                config_path=config_path,
-                user_id=user_id,
-            )
-            log.info("gallery-dl run url %s/%s attempt=%s url=%s args=%s user_id=%s", idx, total_urls, attempts, single_url, extra_args, user_id)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        if register_proc:
+            register_proc(proc)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
+        count = 0
+        stderr_buf: list[str] = []
+
+        async def pump_stdout():
+            nonlocal count
+            assert proc.stdout is not None
+            async for line in proc.stdout:
+                text = line.decode(errors="replace").strip()
+                if not text:
+                    continue
+
+                count += 1
+                filename = None
+                parts = text.split()
+                if parts:
+                    last_part = parts[-1].strip("'\"")
+                    if "/" in last_part or "\\" in last_part or "." in last_part:
+                        try:
+                            filename = Path(last_part).name
+                        except Exception:
+                            # expected: last_part is not a valid path
+                            pass
+
+                if on_progress:
+                    try:
+                        on_progress(total_download_count + count, filename, single_url)
+                    except TypeError:
+                        try:
+                            on_progress(total_download_count + count, filename)
+                        except TypeError:
+                            on_progress(total_download_count + count)
+
+        async def pump_stderr():
+            assert proc.stderr is not None
+            async for line in proc.stderr:
+                stderr_buf.append(line.decode(errors="replace"))
+
+        try:
+            await asyncio.gather(pump_stdout(), pump_stderr())
+            returncode = await proc.wait()
+        except asyncio.CancelledError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            raise
+        finally:
             if register_proc:
-                register_proc(proc)
+                register_proc(None)
 
-            count = 0
-            stderr_buf: list[str] = []
+        last_stderr = last_stderr or "".join(stderr_buf)[-3000:]
+        files_after = set(p for p in dest_dir.rglob("*") if p.is_file())
+        new_files = files_after - files_before
 
-            async def pump_stdout():
-                nonlocal count
-                assert proc.stdout is not None
-                async for line in proc.stdout:
-                    text = line.decode(errors="replace").strip()
-                    if not text:
-                        continue
+        cur_files = [p for p in dest_dir.rglob("*") if p.is_file()]
+        if returncode == 0 and (len(new_files) > 0 or len(cur_files) > 0):
+            success_count += 1
+            total_download_count += max(count, len(new_files), len(cur_files))
+            if on_progress:
+                try:
+                    on_progress(total_download_count, None, single_url)
+                except Exception:
+                    pass
+        else:
+            log.info("gallery-dl failed or produced 0 files for URL %s (code=%s).", single_url, returncode)
+            fallback_handled = False
+            if fallback_cdl:
+                log.info("Immediately passing failed URL %s to cyberdrop-dl...", single_url)
+                try:
+                    from ..cyberdrop_dl import run_with_progress as run_cdl_progress
 
-                    count += 1
-                    filename = None
-                    parts = text.split()
-                    if parts:
-                        last_part = parts[-1].strip("'\"")
-                        if "/" in last_part or "\\" in last_part or "." in last_part:
+                    def on_cdl_item_progress(cdl_count, cdl_filename=None, cdl_url=None):
+                        if on_progress:
                             try:
-                                filename = Path(last_part).name
+                                on_progress(total_download_count + cdl_count, cdl_filename, single_url)
                             except Exception:
-                                # expected: last_part is not a valid path
                                 pass
 
-                    if on_progress:
-                        try:
-                            on_progress(total_download_count + count, filename, single_url)
-                        except TypeError:
+                    cdl_res = await run_cdl_progress(
+                        single_url,
+                        dest_dir,
+                        on_progress=on_cdl_item_progress,
+                        extra_args=extra_args,
+                        register_proc=register_proc,
+                        user_id=user_id,
+                        fallback_gdl=False,
+                    )
+                    cdl_files_after = set(p for p in dest_dir.rglob("*") if p.is_file())
+                    cdl_new_files = cdl_files_after - files_before
+                    if cdl_res.ok and (len(cdl_new_files) > 0 or len(cdl_files_after) > 0):
+                        success_count += 1
+                        total_download_count += max(len(cdl_new_files), len(cdl_res.files))
+                        fallback_handled = True
+                        if on_progress:
                             try:
-                                on_progress(total_download_count + count, filename)
-                            except TypeError:
-                                on_progress(total_download_count + count)
+                                on_progress(total_download_count, None, single_url)
+                            except Exception:
+                                pass
+                except Exception as cdl_err:
+                    log.warning("cyberdrop-dl fallback error for URL %s: %s", single_url, cdl_err)
 
-            async def pump_stderr():
-                assert proc.stderr is not None
-                async for line in proc.stderr:
-                    stderr_buf.append(line.decode(errors="replace"))
-
-            try:
-                await asyncio.gather(pump_stdout(), pump_stderr())
-                returncode = await proc.wait()
-            except asyncio.CancelledError:
+            if not fallback_handled:
+                log.info("Attempting DirectDownloader fallback for URL %s...", single_url)
+                from ..direct import download_direct
                 try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    # expected: process already killed or terminated
-                    pass
-                raise
-            finally:
-                if register_proc:
-                    register_proc(None)
+                    async def on_direct_prog(current_bytes, total_bytes, filename, direct_u=None):
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count + 1, filename, single_url)
+                            except Exception:
+                                pass
 
-            last_stderr = last_stderr or "".join(stderr_buf)[-3000:]
-
-            if returncode == 0:
-                success_count += 1
-                total_download_count += count
-                if on_progress:
-                    on_progress(total_download_count)
-                break
-
-            log.info("gallery-dl attempt failed for URL %s (code=%s), triggering immediate fallback: %s", single_url, returncode, last_stderr)
-            break
+                    direct_paths = await download_direct(single_url, dest_dir, progress_cb=on_direct_prog)
+                    if direct_paths:
+                        success_count += 1
+                        total_download_count += len(direct_paths)
+                        if on_progress:
+                            try:
+                                on_progress(total_download_count, None, single_url)
+                            except Exception:
+                                pass
+                except Exception as de:
+                    log.warning("DirectDownloader fallback also failed for URL %s: %s", single_url, de)
 
     files = sorted(p for p in dest_dir.rglob("*") if p.is_file())
-    ok = (success_count == total_urls and len(files) > 0)
+    ok = (success_count == total_urls and len(files) > 0) or (len(files) > 0)
     return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)
