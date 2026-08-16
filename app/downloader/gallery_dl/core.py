@@ -273,19 +273,9 @@ async def run_with_progress(
                     on_progress(total_download_count)
                 break
 
-            rate_limited = looks_rate_limited(last_stderr)
-            if not rate_limited or backoff.exhausted:
-                log.error("gallery-dl failed for URL %s: %s", single_url, last_stderr)
-                break
-
-            delay = backoff.next_delay()
-            log.warning(
-                "gallery-dl looks rate-limited (attempt %s), backing off %.0fs before retry",
-                attempts, delay,
-            )
-            await asyncio.sleep(delay)
-            last_stderr = ""
+            log.info("gallery-dl attempt failed for URL %s (code=%s), triggering immediate fallback: %s", single_url, returncode, last_stderr)
+            break
 
     files = sorted(p for p in dest_dir.rglob("*") if p.is_file())
-    ok = (success_count == total_urls)
+    ok = (success_count == total_urls and len(files) > 0)
     return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)

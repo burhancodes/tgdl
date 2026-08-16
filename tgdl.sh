@@ -24,6 +24,12 @@ ensure_env() {
     chmod -R 777 data logs 2>/dev/null || true
 }
 
+auto_prune_garbage() {
+    echo "Cleaning up dangling images & build cache..."
+    docker image prune -f 2>/dev/null || true
+    docker builder prune -f 2>/dev/null || true
+}
+
 do_start() {
     ensure_env
     echo "=========================================="
@@ -42,6 +48,9 @@ do_start() {
     docker compose up -d
 
     echo ""
+    auto_prune_garbage
+
+    echo ""
     echo "=========================================="
     echo " Service Status                           "
     echo "=========================================="
@@ -56,7 +65,8 @@ do_stop() {
     echo "=========================================="
     echo " Stopping TGDL Services                   "
     echo "=========================================="
-    docker compose down
+    docker compose down --remove-orphans
+    auto_prune_garbage
     echo "Stopped cleanly."
 }
 
@@ -64,6 +74,33 @@ do_restart() {
     echo "Restarting TGDL services..."
     do_stop
     do_start
+}
+
+do_clean() {
+    echo "=========================================="
+    echo " Cleaning Docker Garbage & Build Artifacts"
+    echo "=========================================="
+    echo "1. Stopping and removing orphaned containers..."
+    docker compose down --remove-orphans || true
+
+    echo ""
+    echo "2. Pruning dangling & unused Docker images..."
+    docker image prune -f
+
+    echo ""
+    echo "3. Pruning stopped containers..."
+    docker container prune -f
+
+    echo ""
+    echo "4. Pruning unused Docker networks..."
+    docker network prune -f
+
+    echo ""
+    echo "5. Pruning Docker build cache..."
+    docker builder prune -f 2>/dev/null || true
+
+    echo ""
+    echo "Docker cleanup complete!"
 }
 
 do_update() {
@@ -75,7 +112,7 @@ do_update() {
 
     echo ""
     echo "2. Stopping existing containers..."
-    docker compose down || true
+    docker compose down --remove-orphans || true
 
     echo ""
     echo "3. Pulling fresh Docker images & restarting..."
@@ -100,6 +137,7 @@ show_help() {
     echo "  stop      - Stop & remove running containers"
     echo "  restart   - Restart all services"
     echo "  update    - Pull git repo, fetch latest images, and restart"
+    echo "  clean     - Clean dangling images, stopped containers & build cache"
     echo "  status    - View running container status"
     echo "  logs      - Tail live container logs"
     echo "  help      - Display this help message"
@@ -119,6 +157,9 @@ case "$ACTION" in
         ;;
     update)
         do_update
+        ;;
+    clean|prune)
+        do_clean
         ;;
     status)
         do_status
