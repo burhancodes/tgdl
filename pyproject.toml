@@ -29,14 +29,14 @@ dependencies = [
     "tgcrypto>=1.2.5",
     "webhost",
     "gallery-dl",
-    "cyberdrop-dl",
+    "cyberdrop-dl-patched",
 ]
 
 [tool.uv.sources]
 async-mega-py = { git = "https://github.com/NTFSvolume/mega.py.git" }
 webhost = { git = "https://github.com/Burhanverse/webhost.git" }
 gallery-dl = { git = "https://codeberg.org/mikf/gallery-dl.git" }
-cyberdrop-dl = { git = "https://github.com/Cyberdrop-DL/cyberdrop-dl.git" }
+cyberdrop-dl-patched = { git = "https://github.com/Cyberdrop-DL/cyberdrop-dl.git" }
 
 [dependency-groups]
 dev = [
