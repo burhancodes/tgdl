@@ -1,0 +1,15 @@
+.git
+.venv
+data/
+logs/
+auth/
+scratch/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.env
+**/__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
