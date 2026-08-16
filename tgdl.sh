@@ -41,7 +41,6 @@ do_start() {
 
     docker pull "${SCRAPER_IMAGE}"
     docker pull "${BOT_IMAGE}"
-    docker pull redis:7-alpine
 
     echo ""
     echo "Launching Docker Compose stack..."

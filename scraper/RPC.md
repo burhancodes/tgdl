@@ -179,8 +179,8 @@ The scraper sidecar uses the following environment variables:
 |---|---|---|
 | `PORT` | `8080` | HTTP server listening port |
 | `RPC_SHARED_SECRET` | `null` | Shared secret token for `/rpc` authorization |
-| `REDIS_URI` / `REDIS_URL` | `null` | Optional Redis URI (`redis://...`). Falls back gracefully to in-memory `Keyv` cache if unset or unreachable |
-| `CACHE_TTL_STREAMS` | `3600` | Stream result cache TTL in seconds |
+| `CACHE_MAX_BYTES` | `20971520` (20MB) | Max in-memory cache size limit (evicts oldest entries via LRU) |
+| `CACHE_TTL_STREAMS` | `3600` | Stream result cache TTL in seconds (1 hour) |
 | `SCRAPER_CONCURRENCY` | `12` | Max concurrent provider scrapers (`p-limit`) |
 | `SCRAPER_PROVIDER_TIMEOUT_MS` | `20000` (20s) | Per-provider scrape timeout |
 | `SCRAPER_HARD_TIMEOUT_MS` | `30000` (30s) | Hard cutoff deadline for all providers in `scrapeAll()` |
