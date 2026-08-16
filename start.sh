@@ -35,13 +35,13 @@ mkdir -p data logs auth scratch
 SCRAPER_PORT="${PORT:-8080}"
 MAGNETIO_URL="${MAGNETIO_RPC_URL:-http://localhost:${SCRAPER_PORT}/rpc}"
 
-# 2. Ensure Node modules are installed for scraper sidecar
-if [ ! -d "scraper/node_modules" ]; then
-    if command -v npm >/dev/null 2>&1; then
-        echo "Installing Node.js dependencies for scraper sidecar..."
-        (cd scraper && npm install)
-    else
-        echo "Warning: 'npm' not found. Ensure scraper dependencies are installed."
+# 2. Ensure Node modules are installed and synced for scraper sidecar
+if command -v npm >/dev/null 2>&1; then
+    echo "Syncing Node.js dependencies for scraper sidecar..."
+    (cd scraper && npm install --silent)
+else
+    if [ ! -d "scraper/node_modules" ]; then
+        echo "Warning: 'npm' not found and scraper/node_modules is missing."
     fi
 fi
 
