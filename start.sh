@@ -21,18 +21,28 @@ if [ ! -f ".env" ]; then
     fi
 fi
 
-# Load variables from .env for bash fallback values if needed
-if [ -f ".env" ]; path; then
-    export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
+# Load variables from .env
+if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
 fi
+
+# Ensure required directories exist
+mkdir -p data logs auth scratch
 
 SCRAPER_PORT="${PORT:-8080}"
 MAGNETIO_URL="${MAGNETIO_RPC_URL:-http://localhost:${SCRAPER_PORT}/rpc}"
 
 # 2. Ensure Node modules are installed for scraper sidecar
 if [ ! -d "scraper/node_modules" ]; then
-    echo "Installing Node.js dependencies for scraper sidecar..."
-    (cd scraper && npm install)
+    if command -v npm >/dev/null 2>&1; then
+        echo "Installing Node.js dependencies for scraper sidecar..."
+        (cd scraper && npm install)
+    else
+        echo "Warning: 'npm' not found. Ensure scraper dependencies are installed."
+    fi
 fi
 
 # 3. Ensure Python environment is synced
