@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     hls_download_timeout: int = Field(default=300, description="Timeout for HLS download operations in seconds")
     gdl_retries: int = 4
 
+    # --- cyberdrop-dl config & pacing ---
+    cdl_config_path: Path = Field(
+        default=Path("./app/downloader/cyberdrop_dl/config.yaml"),
+        description="Path to default cyberdrop-dl configuration file",
+    )
+    cdl_retries: int = 3
+    cdl_max_run_retries: int = 3
+    cdl_backoff_base_s: float = 30.0
+    cdl_backoff_multiplier: float = 2.5
+
     # --- adaptive backoff on rate-limit signals ---
     gdl_max_run_retries: int = 3
     gdl_backoff_base_s: float = 30.0
@@ -162,6 +172,10 @@ class Settings(BaseSettings):
     @property
     def gdl_archive_path(self) -> Path:
         return self.data_dir / "gdl_archive.sqlite3"
+
+    @property
+    def cdl_archive_path(self) -> Path:
+        return self.data_dir / "cdl_archive.db"
 
     @property
     def downloads_dir(self) -> Path:

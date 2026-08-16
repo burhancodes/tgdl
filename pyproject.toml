@@ -1,6 +1,6 @@
 [project]
 name = "tgdl-bot"
-version = "0.3.270"
+version = "0.4.304"
 description = "An all-in-one Telegram media & file downloader, archive extractor, cloud storage mirror, and torrent manager"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,6 +10,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "async-mega-py",
     "av>=18.0.0",
+    "cyberdrop-dl-patched>=10.5.0",
     "filetype>=1.2.0",
     "feedparser>=6.0.11",
     "gallery-dl>=1.32.8",

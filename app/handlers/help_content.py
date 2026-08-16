@@ -16,6 +16,8 @@ def get_help_content(page: str = "main") -> tuple[str, InlineKeyboardMarkup]:
             "> _Full-featured multi-protocol downloader via aria2c engine._\n\n"
             "• `/gdl [flags] <url>` or `/gallerydl [flags] <url>`\n"
             "> _Download media albums, posts, and videos from 100+ sites via gallery-dl engine._\n\n"
+            "• `/cdl [flags] <url>` or `/cyberdropdl [flags] <url>`\n"
+            "> _Bulk download files & albums from cyberdrop-dl supported file hosts & image boards._\n\n"
             "• `/mega [flags] <mega_url>` or `/meganz [flags] <mega_url>`\n"
             "> _Download files and folders recursively from mega.nz with real-time speed & file metrics._\n\n"
             "• `/mega -login <email:password>` or `/mega -logout` or `/mega -account`\n"
@@ -28,7 +30,7 @@ def get_help_content(page: str = "main") -> tuple[str, InlineKeyboardMarkup]:
             "• `-uz` or `-unzip`: Automatically extract downloaded archives.\n"
             "• `-p <password>` or `-pass <password>`: Specify extraction password.\n\n"
             "**Batch Processing:**\n"
-            "• Reply to a `.txt` file containing URLs (one per line) with `/dl`, `/aria`, `/gdl`, or `/mega`."
+            "• Reply to a `.txt` file containing URLs (one per line) with `/dl`, `/aria`, `/gdl`, `/cdl`, or `/mega`."
         )
     elif page == "aria":
         text = (

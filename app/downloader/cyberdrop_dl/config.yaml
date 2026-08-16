@@ -1,0 +1,22 @@
+# Default cyberdrop-dl configuration file for TGDL
+# Reference: https://script-ware.gitbook.io/cyberdrop-dl/reference/config
+
+download:
+  auto_start: true
+  min_free_space: 0
+  ignore_history: true
+  mtime: false
+  delete_empty_folders: true
+  delete_partial_files: true
+  max_file_name_length: 95
+  max_folder_name_length: 60
+
+network:
+  rate_limit: 25
+  connection_timeout: 15
+  read_timeout: 300
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
+
+ui:
+  mode: "disabled"
+  show_stats: false

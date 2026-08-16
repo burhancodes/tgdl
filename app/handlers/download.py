@@ -384,6 +384,64 @@ def register_download_handlers(app: Client) -> None:
             is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password
         )
 
+    @app.on_message(filters.command(["cyberdropdl", "cdl"]) & authorized_filter)
+    async def cdl_cmd(client: Client, message: Message) -> None:
+        text_tokens = message.text.split() if message.text else []
+        is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
+        urls = []
+
+        if message.reply_to_message:
+            reply_msg = message.reply_to_message
+
+            if reply_msg.document and (
+                reply_msg.document.file_name.endswith(".txt") or
+                (reply_msg.document.mime_type and reply_msg.document.mime_type.startswith("text/"))
+            ):
+                temp_path = await reply_msg.download()
+                if temp_path and Path(temp_path).exists():
+                    try:
+                        content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if line.startswith(("http://", "https://")):
+                                urls.append(line)
+                    except Exception as e:
+                        log.warning("Failed reading replied txt file for cdl_cmd: %s", e)
+                    finally:
+                        Path(temp_path).unlink(missing_ok=True)
+
+            reply_text = reply_msg.text or reply_msg.caption
+            if reply_text and not urls:
+                for token in reply_text.split():
+                    token = token.strip()
+                    if token.startswith(("http://", "https://")):
+                        urls.append(token)
+
+        if not urls:
+            urls = parsed_urls
+
+        if not urls:
+            await message.reply_text(
+                "Provide a URL or reply to a text/message containing URLs:\n"
+                "• `/cdl [-m|-mirror] [-tg] [-uz] [-p password] <url>`\n"
+                "• Reply with `/cdl [-uz]` to a text message or `.txt` file containing URLs."
+            )
+            return
+
+        urls_json = json.dumps([f"cdl:{u}" for u in urls]) if len(urls) > 1 else f"cdl:{urls[0]}"
+        prefix_parts = []
+        if is_mirror:
+            prefix_parts.append("mirror")
+        if unzip:
+            prefix_parts.append("unzip")
+        prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
+        prefix = f"cyberdrop-dl{prefix_str}:"
+        display_text = f"{prefix} `{urls[0]}`" if len(urls) == 1 else f"{prefix} `{urls[0]}` (+ {len(urls) - 1} more)"
+        await _create_and_enqueue_job(
+            client, message.chat.id, urls_json, message, display_text,
+            is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password, engine="cyberdrop-dl"
+        )
+
     @app.on_message(filters.command(["mega", "meganz"]) & authorized_filter)
     async def mega_cmd(client: Client, message: Message) -> None:
         text_tokens = message.text.split() if message.text else []

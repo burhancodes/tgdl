@@ -118,6 +118,7 @@ async def main() -> None:
             BotCommand("tor", "Download torrent or magnet link"),
             BotCommand("ts", "Search torrents across indexers & plugins"),
             BotCommand("gdl", "Batch download URLs from replied .txt file"),
+            BotCommand("cdl", "Batch download URLs using cyberdrop-dl"),
             BotCommand("mega", "Download file or folder from Mega.nz"),
             BotCommand("gdlconf", "Manage user gallery-dl configuration"),
             BotCommand("gd2tg", "Download Google Drive link to Telegram"),

@@ -829,6 +829,7 @@ class QueueManager:
                             if current_url:
                                 job_state.current_download_url = current_url
                             job_state.trigger_event.set()
+                        from ..downloader import run_cyberdrop_dl
                         result = await run_with_progress(
                             target_u,
                             dest_dir,
@@ -836,6 +837,89 @@ class QueueManager:
                             register_proc=reg,
                             user_id=job.chat_id,
                         )
+                        if not result.ok:
+                            log.warning("gallery-dl failed for mirror link %s, attempting cyberdrop-dl fallback", target_u)
+                            result = await run_cyberdrop_dl(
+                                target_u,
+                                dest_dir,
+                                on_progress=on_dl_progress,
+                                register_proc=reg,
+                                user_id=job.chat_id,
+                            )
+
+            elif cleaned_url.startswith(("cdl:", "cyberdrop-dl:")) or args_dict.get("engine") == "cyberdrop-dl":
+                target_u = cleaned_url
+                if target_u.startswith("cdl:"):
+                    target_u = target_u[len("cdl:"):]
+                elif target_u.startswith("cyberdrop-dl:"):
+                    target_u = target_u[len("cyberdrop-dl:"):]
+
+                extra_args_list = []
+                if job.args:
+                    try:
+                        args_data = json.loads(job.args)
+                        if isinstance(args_data, dict):
+                            pwd = args_data.get("password")
+                            if pwd:
+                                extra_args_list.extend(["--password", str(pwd)])
+                            raw_extra = args_data.get("extra_args")
+                            if isinstance(raw_extra, list):
+                                extra_args_list.extend([str(x) for x in raw_extra])
+                        elif isinstance(args_data, list):
+                            extra_args_list = [str(x) for x in args_data]
+                    except Exception as e:
+                        log.warning("Failed to parse job.args for job #%s: %s", job.id, e)
+
+                from ..downloader import (
+                    DownloadResult,
+                    download_direct,
+                    run_cyberdrop_dl,
+                    run_with_progress,
+                )
+
+                def on_cdl_progress(count: int, filename: str | None = None, current_url: str | None = None) -> None:
+                    job_state.download_count = count
+                    if filename:
+                        job_state.current_download_file = filename
+                    if current_url:
+                        job_state.current_download_url = current_url
+                    job_state.trigger_event.set()
+
+                result = await run_cyberdrop_dl(
+                    target_u,
+                    dest_dir,
+                    on_progress=on_cdl_progress,
+                    extra_args=extra_args_list if extra_args_list else None,
+                    register_proc=reg,
+                    user_id=job.chat_id,
+                )
+                if not result.ok:
+                    log.info("cyberdrop-dl failed for %s. Attempting gallery-dl fallback...", target_u)
+                    result = await run_with_progress(
+                        target_u,
+                        dest_dir,
+                        on_progress=on_cdl_progress,
+                        extra_args=extra_args_list if extra_args_list else None,
+                        register_proc=reg,
+                        user_id=job.chat_id,
+                    )
+                if not result.ok:
+                    log.info("gallery-dl fallback also failed for %s. Falling back to DirectDownloader...", target_u)
+                    async def on_fallback_progress(current: int, total: int, filename: str, url: str | None = None) -> None:
+                        job_state.total_downloaded_bytes = current
+                        job_state.total_expected_bytes = total
+                        if total > 0:
+                            job_state.download_pct = min(100.0, (current / total) * 100.0)
+                        if filename:
+                            job_state.current_download_file = filename
+                        if url:
+                            job_state.current_download_url = url
+                        job_state.trigger_event.set()
+                    try:
+                        downloaded_paths = await download_direct(target_u, dest_dir, progress_cb=on_fallback_progress)
+                        result = DownloadResult(ok=True, files=downloaded_paths)
+                    except Exception as fallback_err:
+                        log.warning("DirectDownloader fallback also failed for %s: %s", target_u, fallback_err)
 
             elif cleaned_url.startswith("direct:") or is_direct_url(cleaned_url) or (await is_m3u8_url(cleaned_url)):
                 direct_url = job.url if (job.url.startswith("[") and job.url.endswith("]")) else job.url.removeprefix("direct:")
@@ -898,6 +982,7 @@ class QueueManager:
                     DownloadResult,
                     download_direct,
                     download_via_aria2_async,
+                    run_cyberdrop_dl,
                     run_with_progress,
                 )
                 if args_dict.get("engine") == "aria2":
@@ -937,7 +1022,17 @@ class QueueManager:
                         user_id=job.chat_id,
                     )
                     if not result.ok:
-                        log.info("gallery-dl failed or unsupported site for %s. Falling back to DirectDownloader...", job.url)
+                        log.info("gallery-dl failed or unsupported site for %s. Attempting cyberdrop-dl immediate fallback...", job.url)
+                        result = await run_cyberdrop_dl(
+                            job.url,
+                            dest_dir,
+                            on_progress=on_download_progress,
+                            extra_args=extra_args_list if extra_args_list else None,
+                            register_proc=reg,
+                            user_id=job.chat_id,
+                        )
+                    if not result.ok:
+                        log.info("cyberdrop-dl fallback also failed for %s. Falling back to DirectDownloader...", job.url)
                         async def on_fallback_progress(current: int, total: int, filename: str, url: str | None = None) -> None:
                             job_state.total_downloaded_bytes = current
                             job_state.total_expected_bytes = total
