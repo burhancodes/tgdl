@@ -11,6 +11,10 @@ from .magnetio_client import (
     MagnetioRPCError,
     search_torrents_rpc,
 )
+from .magnetio_daemon import (
+    start_magnetio_daemon,
+    stop_magnetio_daemon,
+)
 from .search import (
     SITES,
     format_search_results_html,
@@ -39,6 +43,8 @@ __all__ = [
     "search_torrents",
     "search_torrents_rpc",
     "start_aria2_daemon",
+    "start_magnetio_daemon",
     "stop_aria2_daemon",
+    "stop_magnetio_daemon",
     "telegraph_helper",
 ]

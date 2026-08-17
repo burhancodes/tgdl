@@ -12,6 +12,7 @@ from .magnetio_client import (
     fetch_providers_rpc,
     search_torrents_rpc,
 )
+from .magnetio_daemon import start_magnetio_daemon
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ async def initiate_search_tools() -> None:
     """Initializes Magnetio JSON-RPC search provider list and checks sidecar liveness."""
     global SITES
     SITES = {}
+
+    await start_magnetio_daemon()
 
     healthy = await check_health_rpc()
     if not healthy:

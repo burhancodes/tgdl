@@ -7,6 +7,8 @@ import aiohttp
 
 from app.config import settings
 
+from .magnetio_daemon import get_active_rpc_secret, get_active_rpc_url
+
 log = logging.getLogger(__name__)
 
 
@@ -32,7 +34,10 @@ def format_bytes(size: float) -> str:
 
 async def _rpc_call(method: str, params: dict[str, Any] | None = None) -> Any:
     """Sends a JSON-RPC 2.0 request to the Magnetio scraper sidecar."""
-    if not settings.magnetio_rpc_url:
+    rpc_url = get_active_rpc_url()
+    rpc_secret = get_active_rpc_secret()
+
+    if not rpc_url:
         raise MagnetioRPCError("MAGNETIO_RPC_URL is not configured.")
 
     payload = {
@@ -43,14 +48,14 @@ async def _rpc_call(method: str, params: dict[str, Any] | None = None) -> Any:
     }
 
     headers = {"Content-Type": "application/json"}
-    if settings.magnetio_rpc_secret:
-        headers["Authorization"] = f"Bearer {settings.magnetio_rpc_secret}"
+    if rpc_secret:
+        headers["Authorization"] = f"Bearer {rpc_secret}"
 
     timeout = aiohttp.ClientTimeout(total=settings.torrent_timeout)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(settings.magnetio_rpc_url, json=payload, headers=headers) as resp:
+            async with session.post(rpc_url, json=payload, headers=headers) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     log.warning("Magnetio RPC returned non-200 status %s: %s", resp.status, text)

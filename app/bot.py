@@ -148,9 +148,12 @@ async def main() -> None:
     await idle()
 
     log.info("Shutting down bot...")
+    from .downloader.aria2c.torrent import stop_aria2_daemon, stop_magnetio_daemon
     await queue_manager.stop()
     await store.close()
     await delete_status()
+    await stop_aria2_daemon()
+    await stop_magnetio_daemon()
     await app.stop()
 
 
