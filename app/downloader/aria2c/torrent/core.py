@@ -125,6 +125,15 @@ async def start_aria2_daemon() -> None:
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         tracker_arg
     ]
+    if getattr(settings, "force_ipv6", False) or getattr(settings, "source_address", None):
+        cmd.extend([
+            "--disable-ipv6=false",
+            "--enable-dht6=true",
+            "--async-dns=true",
+        ])
+        src_addr = getattr(settings, "source_address", None) or "::"
+        cmd.append(f"--interface={src_addr}")
+
     if settings.global_download_speed_limit and str(settings.global_download_speed_limit).strip().lower() not in ("none", "0", ""):
         cmd.append(f"--max-overall-download-limit={settings.global_download_speed_limit}")
 

@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     allow_shared_upload_keys: bool = Field(default=False, description="Allow falling back to global bot owner API keys for webhost uploads")
     allow_private_network_urls: bool = Field(default=False, description="Allow downloading URLs resolving to private/reserved IP ranges")
     show_system_stats_on_job_card: bool = Field(default=True, description="Show host CPU/RAM/disk/network/uptime stats on individual job status cards")
-
+    force_ipv6: bool = Field(default=False, description="Prefer or force IPv6 for outgoing downloader connections (gallery-dl, aria2c, direct)")
+    source_address: str | None = Field(default=None, description="Optional local source address or '::' for IPv6")
 
     # --- APK Patcher & JKS Keystore settings ---
     keystore_path: Path | None = Field(default=None, description="Optional global JKS keystore file path")

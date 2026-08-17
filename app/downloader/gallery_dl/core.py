@@ -98,6 +98,16 @@ def _build_cmd(
     ])
     if settings.global_download_speed_limit and str(settings.global_download_speed_limit).strip().lower() not in ("none", "0", ""):
         cmd.extend(["--limit-rate", str(settings.global_download_speed_limit)])
+    src_addr = getattr(settings, "source_address", None) or ("::" if getattr(settings, "force_ipv6", False) else None)
+    if src_addr:
+        cmd.extend(["--source-address", str(src_addr).strip()])
+
+    from ...uploader.user_keys import resolve_upload_api_key
+
+    gf_token = resolve_upload_api_key(user_id, "gofile") or getattr(settings, "gofile_api_key", None)
+    if gf_token and str(gf_token).strip():
+        cmd.extend(["-o", f"extractor.gofile.api-token={str(gf_token).strip()}"])
+
     if extra_args:
         cmd.extend(extra_args)
     if links_file:

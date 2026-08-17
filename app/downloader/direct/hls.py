@@ -22,7 +22,8 @@ import aiohttp
 import av
 
 from ...config import settings
-from .core import DirectDownloadError, is_url_private_ip
+from .core import DirectDownloadError, get_aiohttp_connector, is_url_private_ip
+
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ async def download_hls(
     # Fetch initial playlist
     log.info("Fetching M3U8 playlist from %s", url)
     async with aiohttp.ClientSession(
+        connector=get_aiohttp_connector(),
         timeout=aiohttp.ClientTimeout(total=30.0, connect=15.0)
     ) as session:
         async with session.get(url, headers=req_headers, allow_redirects=True) as resp:
@@ -137,6 +139,7 @@ async def download_hls(
 
         # Fetch media playlist
         async with aiohttp.ClientSession(
+            connector=get_aiohttp_connector(),
             timeout=aiohttp.ClientTimeout(total=30.0, connect=15.0)
         ) as session:
             async with session.get(media_url, headers=req_headers, allow_redirects=True) as resp:

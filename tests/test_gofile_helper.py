@@ -167,3 +167,28 @@ async def test_gdlconf_sync_callback_execution():
         mock_query.message.reply_text.assert_called()
 
 
+@pytest.mark.asyncio
+async def test_ipv6_downloader_configuration(tmp_path: Path):
+
+    import socket
+    from app.config import settings
+    from app.downloader.gallery_dl.core import _build_cmd
+    from app.downloader.direct.core import get_aiohttp_connector
+
+    with patch.object(settings, "force_ipv6", True), patch.object(settings, "source_address", None):
+        cmd = _build_cmd(["https://example.com/item"], tmp_path)
+        assert "--source-address" in cmd
+        idx = cmd.index("--source-address")
+        assert cmd[idx + 1] == "::"
+
+        conn = get_aiohttp_connector()
+        assert conn._family == socket.AF_INET6
+
+    with patch.object(settings, "force_ipv6", False), patch.object(settings, "source_address", "2001:db8::1"):
+        cmd = _build_cmd(["https://example.com/item"], tmp_path)
+        assert "--source-address" in cmd
+        idx = cmd.index("--source-address")
+        assert cmd[idx + 1] == "2001:db8::1"
+
+
+

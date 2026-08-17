@@ -21,6 +21,13 @@ log = logging.getLogger(__name__)
 _CHUNK_SIZE = 1024 * 1024  # 1MB chunks
 
 
+def get_aiohttp_connector() -> aiohttp.TCPConnector:
+    """Returns an aiohttp TCPConnector configured with IPv6 family if force_ipv6 is enabled."""
+    if getattr(settings, "force_ipv6", False):
+        return aiohttp.TCPConnector(family=socket.AF_INET6)
+    return aiohttp.TCPConnector()
+
+
 class DirectDownloadError(Exception):
     pass
 
@@ -138,7 +145,7 @@ async def is_m3u8_url(url: str, session: aiohttp.ClientSession | None = None) ->
         if session:
             return await _check(session)
         else:
-            async with aiohttp.ClientSession() as sess:
+            async with aiohttp.ClientSession(connector=get_aiohttp_connector()) as sess:
                 return await _check(sess)
     except Exception as e:
         log.debug("Error in is_m3u8_url: %s", e)
@@ -420,6 +427,7 @@ class DirectDownloader:
             raise DirectDownloadError("No direct URLs provided for download.")
 
         async with aiohttp.ClientSession(
+            connector=get_aiohttp_connector(),
             timeout=aiohttp.ClientTimeout(total=None, connect=30.0)
         ) as session:
             for item in items:
