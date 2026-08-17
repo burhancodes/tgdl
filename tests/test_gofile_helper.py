@@ -126,3 +126,44 @@ def test_update_all_gdl_configs_with_user_dirs(tmp_path: Path):
         assert user_1_conf["extractor"]["gofile"]["salt"] == "new_salt_abc"
         assert user_2_conf["extractor"]["gofile"]["salt"] == "new_salt_abc"
 
+
+@pytest.mark.asyncio
+async def test_gdlconf_sync_callback_execution():
+    from unittest.mock import AsyncMock
+    from app.handlers.gdlconf import register_gdlconf_handlers
+
+    mock_app = MagicMock()
+    callback_handler = None
+    command_handler = None
+
+    def mock_on_callback_query(f):
+        def decorator(fn):
+            nonlocal callback_handler
+            callback_handler = fn
+            return fn
+        return decorator
+
+    def mock_on_message(f):
+        def decorator(fn):
+            nonlocal command_handler
+            command_handler = fn
+            return fn
+        return decorator
+
+    mock_app.on_callback_query = mock_on_callback_query
+    mock_app.on_message = mock_on_message
+
+    register_gdlconf_handlers(mock_app)
+    assert callback_handler is not None
+
+    mock_query = AsyncMock()
+    mock_query.data = "gdlconf:sync_gofile"
+    mock_query.from_user.id = 12345
+    mock_query.message.chat.id = 12345
+
+    with patch("app.handlers.gdlconf.sync_gofile_salt", return_value=("12af056dacea0b", {})):
+        await callback_handler(mock_app, mock_query)
+        mock_query.answer.assert_called()
+        mock_query.message.reply_text.assert_called()
+
+
