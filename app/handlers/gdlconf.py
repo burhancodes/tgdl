@@ -308,6 +308,7 @@ def register_gdlconf_handlers(app: Client) -> None:
                 user_conf_path.parent.mkdir(parents=True, exist_ok=True)
                 user_conf_path.write_text(content, encoding="utf-8")
                 os.chmod(user_conf_path, 0o600)
+                update_gdl_conf_gofile(user_conf_path)
 
                 await status_msg.edit_text(
                     f"**Saved user gallery-dl configuration!**\n"

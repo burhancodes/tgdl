@@ -211,7 +211,7 @@ def update_gdl_conf_gofile(
     final_salt = (salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT).strip()
     final_ua = (user_agent or get_browser_user_agent()).strip()
 
-    # 1. Update salt in JSON / config content using regex replacement to preserve comments & formatting
+    # 1. Update salt in JSON / config content
     # Case A: "salt"\s*:\s*("[^"]*"|null)
     if re.search(r'("salt"\s*:\s*)(?:null|"[^"]*")', raw_content):
         updated_content = re.sub(
@@ -220,21 +220,44 @@ def update_gdl_conf_gofile(
             raw_content,
             count=1,
         )
+    elif re.search(r'("gofile"\s*:\s*\{)', raw_content):
+        # Case B: "gofile" exists without "salt"
+        updated_content = re.sub(
+            r'("gofile"\s*:\s*\{)',
+            rf'\g<1>\n            "salt": "{final_salt}",',
+            raw_content,
+            count=1,
+        )
+    elif re.search(r'("extractor"\s*:\s*\{)', raw_content):
+        # Case C: "extractor" exists without "gofile"
+        updated_content = re.sub(
+            r'("extractor"\s*:\s*\{)',
+            rf'\g<1>\n        "gofile": {{\n            "salt": "{final_salt}",\n            "recursive": true\n        }},',
+            raw_content,
+            count=1,
+        )
     else:
-        # If "salt" key is not present under "gofile", insert it
-        gofile_block_pattern = r'("gofile"\s*:\s*\{)'
-        if re.search(gofile_block_pattern, raw_content):
-            updated_content = re.sub(
-                gofile_block_pattern,
-                rf'\g<1>\n            "salt": "{final_salt}",',
-                raw_content,
-                count=1,
-            )
-        else:
+        # Case D: Raw JSON fallback
+        try:
+            parsed = json.loads(raw_content)
+            if isinstance(parsed, dict):
+                extr = parsed.setdefault("extractor", {})
+                if isinstance(extr, dict):
+                    gf = extr.setdefault("gofile", {})
+                    if isinstance(gf, dict):
+                        gf["salt"] = final_salt
+                    if final_ua:
+                        extr["user-agent"] = final_ua
+                    updated_content = json.dumps(parsed, indent=4)
+                else:
+                    updated_content = raw_content
+            else:
+                updated_content = raw_content
+        except Exception:
             updated_content = raw_content
 
     # 2. Update user-agent if "user-agent" key exists
-    if final_ua:
+    if final_ua and updated_content != raw_content:
         if re.search(r'("user-agent"\s*:\s*)(?:null|"auto"|"[^"]*")', updated_content):
             updated_content = re.sub(
                 r'("user-agent"\s*:\s*)(?:null|"auto"|"[^"]*")',
