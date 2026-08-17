@@ -34,8 +34,12 @@ mkdir -p data logs auth scratch
 # Ensure Node modules are installed and synced for scraper sidecar
 if command -v npm >/dev/null 2>&1; then
     if [ -d "scraper" ]; then
-        echo "Syncing Node.js dependencies for scraper sidecar..."
-        (cd scraper && npm install --silent)
+        # Install dependencies without mutating lockfile or working tree
+        if [ ! -d "scraper/node_modules" ] || [ "scraper/package.json" -nt "scraper/node_modules" ] || [ "scraper/package-lock.json" -nt "scraper/node_modules" ]; then
+            echo "Syncing Node.js dependencies for scraper sidecar..."
+            (cd scraper && (npm ci --silent 2>/dev/null || npm install --no-save --silent))
+            touch scraper/node_modules
+        fi
     fi
 else
     if [ ! -d "scraper/node_modules" ]; then
@@ -46,7 +50,7 @@ fi
 # Ensure Python environment is synced
 if command -v uv >/dev/null 2>&1; then
     echo "Syncing Python dependencies via uv..."
-    uv sync
+    uv sync --frozen 2>/dev/null || uv sync
 else
     echo "Warning: 'uv' tool not found in PATH. Using system Python environment."
 fi

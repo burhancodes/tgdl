@@ -13,3 +13,5 @@ scratch/
 *.py[cod]
 *.zip
 *.pickle
+cookies.txt
+downloads/
