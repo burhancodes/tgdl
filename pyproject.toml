@@ -1,6 +1,6 @@
 [project]
 name = "tgdl-bot"
-version = "0.7"
+version = "0.8"
 description = "An all-in-one Telegram media & file downloader, archive extractor, cloud storage mirror, and torrent manager"
 readme = "README.md"
 requires-python = ">=3.12"

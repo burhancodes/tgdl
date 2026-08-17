@@ -10,8 +10,15 @@ from pathlib import Path
 
 from ...config import settings
 from ...pacing import Backoff, looks_rate_limited
+from .gofile_helper import patch_gallery_dl_gofile
 
 log = logging.getLogger(__name__)
+
+# Ensure GoFile token generation support and env vars are initialized
+try:
+    patch_gallery_dl_gofile()
+except Exception as _e:
+    log.debug("GoFile patch initialization warning: %s", _e)
 
 
 class GalleryDLNotFound(RuntimeError):

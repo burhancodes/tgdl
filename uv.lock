@@ -2195,7 +2195,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/33/59/7cf5ced989e3139a7
 
 [[package]]
 name = "tgdl-bot"
-version = "0.7"
+version = "0.8"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },

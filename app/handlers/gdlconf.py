@@ -26,6 +26,14 @@ from ..downloader import (
     get_user_cookies_path,
     get_user_gdl_config_path,
 )
+from ..downloader.gallery_dl.gofile_helper import (
+    DEFAULT_FALLBACK_SALT,
+    fetch_gofile_salt,
+    get_browser_user_agent,
+    sync_gofile_salt,
+    update_gdl_conf_gofile,
+)
+
 
 log = logging.getLogger(__name__)
 
@@ -175,12 +183,20 @@ def build_gdlconf_text(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     if len(extractors) > 10:
         ext_summary += f" (+ {len(extractors) - 10} more)"
 
+    gofile_salt = None
+    if isinstance(data, dict) and "extractor" in data and isinstance(data["extractor"], dict):
+        gofile_conf = data["extractor"].get("gofile")
+        if isinstance(gofile_conf, dict):
+            gofile_salt = gofile_conf.get("salt")
+    gofile_salt = gofile_salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
+
     text = (
         "**gallery-dl Configuration & Cookies Status**\n\n"
         f"• **Config Scope**: {scope_str}\n"
         f"• **Config Path**: `{active_path}`\n"
         f"• **Config Size**: `{size_str}`\n"
         f"• **Last Modified**: `{mtime_str}`\n"
+        f"• **GoFile Salt**: `{gofile_salt}`\n"
         f"• **Configured Sites**: {ext_summary}\n"
         f"• **Cookies File**: {cookies_str}\n\n"
         "**Usage Commands:**\n"
@@ -188,6 +204,8 @@ def build_gdlconf_text(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         "• Reply to a `cookies.txt` file with `/gdlconf` to upload custom cookies.\n"
         "• `/gdlconf get` — Download current configuration file.\n"
         "• `/gdlconf cookies get` — Download current `cookies.txt` file.\n"
+        "• `/gdlconf gofile` — Check GoFile salt and token status.\n"
+        "• `/gdlconf gofile sync` — Fetch live GoFile salt & update configs.\n"
         "• `/gdlconf delete` — Delete custom user config.\n"
         "• `/gdlconf cookies delete` — Delete custom user `cookies.txt`.\n"
         "• `/gdlconf reset` — Reset config to default template."
@@ -207,6 +225,8 @@ def build_gdlconf_text(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         cookie_row.append(InlineKeyboardButton("Delete Cookies", callback_data="gdlconf:delete_cookies"))
     if cookie_row:
         buttons.append(cookie_row)
+
+    buttons.append([InlineKeyboardButton("Sync GoFile Salt", callback_data="gdlconf:sync_gofile")])
 
     if is_user_specific:
         buttons.append([InlineKeyboardButton("Delete Custom Conf", callback_data="gdlconf:delete")])
@@ -321,7 +341,49 @@ def register_gdlconf_handlers(app: Client) -> None:
                 await message.reply_text("You do not have a custom `cookies.txt` saved.")
             return
 
-        # Case 3: Standard Subcommands for config
+        # Case 3: Subcommands for GoFile Salt Sync
+        elif subcommand in ("gofile", "salt", "gofile salt", "gofile status"):
+            active_path, is_user_specific, _, data = _get_config_info(user_id)
+            gofile_conf = data.get("extractor", {}).get("gofile", {}) if isinstance(data, dict) else {}
+            curr_salt = (
+                gofile_conf.get("salt")
+                if isinstance(gofile_conf, dict)
+                else None
+            ) or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
+            ua = get_browser_user_agent()
+
+            msg_text = (
+                "**GoFile Compatibility & Salt Status**\n\n"
+                f"• **Active Salt**: `{curr_salt}`\n"
+                f"• **Browser User-Agent**: `{ua}`\n"
+                f"• **Target Config**: `{active_path}`\n\n"
+                "Use `/gdlconf gofile sync` to fetch the latest salt directly from GoFile and update your config."
+            )
+            btn = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Sync Live Salt", callback_data="gdlconf:sync_gofile")],
+                [InlineKeyboardButton("Back to GDL Conf", callback_data="gdlconf:view")],
+            ])
+            await message.reply_text(msg_text, reply_markup=btn, link_preview_options=LinkPreviewOptions(is_disabled=True))
+            return
+
+        elif subcommand in ("gofile sync", "gofile update", "sync gofile", "updatesalt", "sync"):
+            status_m = await message.reply_text("Fetching live salt from GoFile...")
+            try:
+                salt, results = await asyncio.to_thread(sync_gofile_salt, True)
+                updated_names = [Path(p).name for p, ok in results.items() if ok]
+                await status_m.edit_text(
+                    f"**GoFile Salt Synchronized!**\n\n"
+                    f"• **Active Salt**: `{salt}`\n"
+                    f"• **Browser UA**: `{get_browser_user_agent()}`\n"
+                    f"• **Updated Configs**: {', '.join(f'`{n}`' for n in updated_names) if updated_names else 'Default template'}\n\n"
+                    f"Free GoFile downloads will now use the updated token generation."
+                )
+            except Exception as e:
+                log.exception("Error syncing GoFile salt")
+                await status_m.edit_text(f"Failed to sync GoFile salt: `{e}`")
+            return
+
+        # Case 4: Standard Subcommands for config
         if subcommand in ("get", "download"):
             active_path = get_gdl_config_path(user_id) or _get_default_template_path()
             if active_path and active_path.exists():
@@ -339,7 +401,7 @@ def register_gdlconf_handlers(app: Client) -> None:
                 user_conf.unlink(missing_ok=True)
                 await message.reply_text("Custom user `gallery-dl.conf` deleted! Reverted to default configuration.")
             else:
-                await message.reply_text("ℹYou do not have a custom `gallery-dl.conf` saved. Currently using default configuration.")
+                await message.reply_text("You do not have a custom `gallery-dl.conf` saved. Currently using default configuration.")
             return
 
         elif subcommand in ("reset", "init"):
@@ -368,9 +430,23 @@ def register_gdlconf_handlers(app: Client) -> None:
             try:
                 await query.message.edit_text(text, reply_markup=keyboard, link_preview_options=LinkPreviewOptions(is_disabled=True))
             except Exception:
-                # expected: message text already up to date or deleted
                 pass
             await query.answer("Refreshed status")
+
+        elif action == "sync_gofile":
+            await query.answer("Syncing GoFile salt...", show_alert=False)
+            try:
+                salt, _ = await asyncio.to_thread(sync_gofile_salt, True)
+                text, keyboard = build_gdlconf_text(user_id)
+                try:
+                    await query.message.edit_text(text, reply_markup=keyboard, link_preview_options=LinkPreviewOptions(is_disabled=True))
+                except Exception:
+                    pass
+                await query.message.reply_text(f"**GoFile Salt Synchronized!**\nActive salt: `{salt}`")
+            except Exception as e:
+                log.exception("Callback error syncing GoFile salt")
+                await query.answer(f"Sync failed: {e}", show_alert=True)
+
 
         elif action == "get":
             active_path = get_gdl_config_path(user_id) or _get_default_template_path()
