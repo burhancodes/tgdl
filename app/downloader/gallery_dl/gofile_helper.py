@@ -399,3 +399,12 @@ def sync_gofile_salt(auto_fetch: bool = True) -> tuple[str, dict[str, bool]]:
     salt = salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
     results = update_all_gdl_configs(salt=salt)
     return salt, results
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    print("Syncing GoFile salt...")
+    active_salt, res = sync_gofile_salt(auto_fetch=True)
+    print(f"Current GoFile Salt: {active_salt}")
+    print(f"Updated configs: {res}")
+

@@ -98,6 +98,13 @@ def _build_cmd(
     conf = config_path or get_cdl_config_path(user_id=user_id)
     cookies = get_cookies_path(user_id=user_id)
 
+    settings.cdl_archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if not settings.cdl_archive_path.exists():
+        try:
+            settings.cdl_archive_path.touch(exist_ok=True)
+        except Exception:
+            pass
+
     cmd = _find_cdl_binary() + [
         "download",
         "--ui", "disabled",

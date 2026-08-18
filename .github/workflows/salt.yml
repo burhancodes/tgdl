@@ -1,0 +1,49 @@
+name: Sync Salt
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-salt:
+    name: Fetch & Sync Salt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen || uv sync
+
+      - name: Run GoFile Salt Sync
+        run: uv run python -m app.downloader.gallery_dl.gofile_helper
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [[ -n $(git status -s app/downloader/gallery_dl/gallery-dl.conf) ]]; then
+            echo "Salt or config updated. Committing changes..."
+            git add app/downloader/gallery_dl/gallery-dl.conf
+            git commit -m "chore(gofile): salt updated [skip ci]"
+            git push
+          else
+            echo "Salt is up-to-date. No changes to commit."
+          fi
