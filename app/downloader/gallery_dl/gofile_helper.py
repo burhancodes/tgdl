@@ -24,7 +24,30 @@ GOFILE_WT_URL = "https://gofile.io/js/wt.obf.js"
 GOFILE_HOME_URL = "https://gofile.io/"
 
 
+def get_configured_salt() -> str:
+    """
+    Reads the active GoFile salt from GOFILE_WT_SALT environment variable,
+    repository gallery-dl.conf, or fallback without making outgoing network requests.
+    """
+    env_salt = os.environ.get("GOFILE_WT_SALT")
+    if env_salt and env_salt.strip():
+        return env_salt.strip()
+
+    try:
+        conf_path = Path(__file__).parent / "gallery-dl.conf"
+        if conf_path.exists():
+            content = conf_path.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r'"salt"\s*:\s*"([^"]+)"', content)
+            if m and m.group(1).strip() and m.group(1).strip() != "null":
+                return m.group(1).strip()
+    except Exception:
+        pass
+
+    return DEFAULT_FALLBACK_SALT
+
+
 def get_browser_user_agent() -> str:
+
     """
     Returns the configured or discovered browser User-Agent.
     Defaults to the hardcoded modern Chromium User-Agent for headless / VPS environments,
@@ -208,7 +231,7 @@ def update_gdl_conf_gofile(
     if not raw_content.strip():
         return False
 
-    final_salt = (salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT).strip()
+    final_salt = (salt or get_configured_salt()).strip()
     final_ua = (user_agent or get_browser_user_agent()).strip()
 
     # 1. Update salt in JSON / config content
@@ -282,7 +305,7 @@ def update_all_gdl_configs(
     """
     Updates global package gallery-dl.conf, settings.gdl_config_path, and any user-specific configs.
     """
-    resolved_salt = salt or fetch_gofile_salt() or DEFAULT_FALLBACK_SALT
+    resolved_salt = salt or get_configured_salt()
     resolved_ua = user_agent or get_browser_user_agent()
 
     results: dict[str, bool] = {}
@@ -330,7 +353,7 @@ def patch_gallery_dl_gofile(salt: str | None = None) -> None:
     and GOFILE_WT_SALT environment variable.
     Also updates site-packages/gallery_dl/extractor/gofile.py on disk if writable so CLI commands benefit.
     """
-    final_salt = (salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT).strip()
+    final_salt = (salt or get_configured_salt()).strip()
     os.environ["GOFILE_WT_SALT"] = final_salt
 
     try:
@@ -340,7 +363,7 @@ def patch_gallery_dl_gofile(salt: str | None = None) -> None:
             import hashlib
             import time
 
-            configured_salt = self.config("salt") or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
+            configured_salt = self.config("salt") or os.environ.get("GOFILE_WT_SALT") or get_configured_salt()
             ua = self.session.headers.get("User-Agent") or get_browser_user_agent()
             data = (
                 f"{ua}::"
@@ -388,23 +411,21 @@ def patch_gallery_dl_gofile(salt: str | None = None) -> None:
         log.debug("Could not patch site-packages file for gallery_dl: %s", e)
 
 
-def sync_gofile_salt(auto_fetch: bool = True) -> tuple[str, dict[str, bool]]:
+def sync_gofile_salt(salt: str | None = None) -> tuple[str, dict[str, bool]]:
     """
-    High-level entrypoint: fetches the latest salt if requested (or falls back),
-    patches gallery-dl, and updates all configuration files.
+    High-level entrypoint: applies the active GoFile salt (from gallery-dl.conf,
+    GOFILE_WT_SALT environment variable, or passed parameter) to all configurations
+    and runtime monkeypatches without making outgoing network requests.
     """
-    salt = None
-    if auto_fetch:
-        salt = fetch_gofile_salt()
-    salt = salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
-    results = update_all_gdl_configs(salt=salt)
-    return salt, results
+    active_salt = salt or get_configured_salt()
+    results = update_all_gdl_configs(salt=active_salt)
+    return active_salt, results
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    print("Syncing GoFile salt...")
-    active_salt, res = sync_gofile_salt(auto_fetch=True)
+    print("Fetching live GoFile salt from wt.obf.js...")
+    fetched_salt = fetch_gofile_salt()
+    active_salt, res = sync_gofile_salt(salt=fetched_salt)
     print(f"Current GoFile Salt: {active_salt}")
     print(f"Updated configs: {res}")
-

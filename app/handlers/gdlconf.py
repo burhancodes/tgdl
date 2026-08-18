@@ -359,19 +359,19 @@ def register_gdlconf_handlers(app: Client) -> None:
                 f"• **Active Salt**: `{curr_salt}`\n"
                 f"• **Browser User-Agent**: `{ua}`\n"
                 f"• **Target Config**: `{active_path}`\n\n"
-                "Use `/gdlconf gofile sync` to fetch the latest salt directly from GoFile and update your config."
+                "Use `/gdlconf gofile sync` to re-apply the active salt to all configs."
             )
             btn = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Sync Live Salt", callback_data="gdlconf:sync_gofile")],
+                [InlineKeyboardButton("Sync Config Salt", callback_data="gdlconf:sync_gofile")],
                 [InlineKeyboardButton("Back to GDL Conf", callback_data="gdlconf:view")],
             ])
             await message.reply_text(msg_text, reply_markup=btn, link_preview_options=LinkPreviewOptions(is_disabled=True))
             return
 
         elif subcommand in ("gofile sync", "gofile update", "sync gofile", "updatesalt", "sync"):
-            status_m = await message.reply_text("Fetching live salt from GoFile...")
+            status_m = await message.reply_text("Synchronizing GoFile salt across configurations...")
             try:
-                salt, results = await asyncio.to_thread(sync_gofile_salt, True)
+                salt, results = await asyncio.to_thread(sync_gofile_salt)
                 updated_names = [Path(p).name for p, ok in results.items() if ok]
                 await status_m.edit_text(
                     f"**GoFile Salt Synchronized!**\n\n"
@@ -438,7 +438,7 @@ def register_gdlconf_handlers(app: Client) -> None:
         elif action == "sync_gofile":
             await query.answer("Syncing GoFile salt...", show_alert=False)
             try:
-                salt, _ = await asyncio.to_thread(sync_gofile_salt, True)
+                salt, _ = await asyncio.to_thread(sync_gofile_salt)
                 text, keyboard = build_gdlconf_text(user_id)
                 try:
                     await query.message.edit_text(text, reply_markup=keyboard, link_preview_options=LinkPreviewOptions(is_disabled=True))

@@ -101,10 +101,9 @@ def test_patch_gallery_dl_gofile():
 
 
 def test_sync_gofile_salt(tmp_path: Path):
-    with patch("app.downloader.gallery_dl.gofile_helper.fetch_gofile_salt", return_value="12af056dacea0b"):
-        salt, results = sync_gofile_salt(auto_fetch=True)
-        assert salt == "12af056dacea0b"
-        assert isinstance(results, dict)
+    salt, results = sync_gofile_salt(salt="12af056dacea0b")
+    assert salt == "12af056dacea0b"
+    assert isinstance(results, dict)
 
 
 def test_update_all_gdl_configs_with_user_dirs(tmp_path: Path):
