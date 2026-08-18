@@ -1,6 +1,10 @@
 name: Sync Salt
 
 on:
+  push:
+    branches:
+      - main
+      - master
   schedule:
     # Run every 6 hours
     - cron: '0 */6 * * *'
