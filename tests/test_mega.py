@@ -119,3 +119,87 @@ def test_user_mega_credentials_save_get_delete():
     assert email is None
     assert pwd is None
 
+
+def test_natural_sorting_utilities():
+    """Verify natural sorting key and natural path sorting key."""
+    from pathlib import PurePosixPath
+    from app.utils.sorting import natural_path_sort_key, natural_sort_key
+
+    # Test string natural sorting
+    names = ["file10.txt", "file1.txt", "file2.txt", "file20.txt", "file3.txt"]
+    sorted_names = sorted(names, key=natural_sort_key)
+    assert sorted_names == ["file1.txt", "file2.txt", "file3.txt", "file10.txt", "file20.txt"]
+
+    # Test hierarchical path natural sorting
+    paths = [
+        PurePosixPath("folder2/file10.txt"),
+        PurePosixPath("folder1/file10.txt"),
+        PurePosixPath("folder1/file2.txt"),
+        PurePosixPath("folder10/file1.txt"),
+        PurePosixPath("folder1/file1.txt"),
+    ]
+    sorted_paths = sorted(paths, key=natural_path_sort_key)
+    assert [str(p) for p in sorted_paths] == [
+        "folder1/file1.txt",
+        "folder1/file2.txt",
+        "folder1/file10.txt",
+        "folder2/file10.txt",
+        "folder10/file1.txt",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mega_client_download_public_folder_serial_order():
+    """Verify MegaClient.download_public_folder downloads files in strictly serial, naturally sorted order."""
+    from pathlib import PurePosixPath
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Create mock nodes with random IDs in unordered fashion
+    class DummyNode:
+        def __init__(self, node_id: str, rel_path: str):
+            self.id = node_id
+            self._crypto = MagicMock()
+            self.rel_path = PurePosixPath(rel_path)
+
+    nodes = [
+        DummyNode("id_10", "subfolder/file10.mp4"),
+        DummyNode("id_1", "subfolder/file1.mp4"),
+        DummyNode("id_2", "subfolder/file2.mp4"),
+        DummyNode("id_root", "root_file.mp4"),
+    ]
+
+    mock_fs = MagicMock()
+    mock_fs.files_from.return_value = nodes
+    mock_fs.relative_path.side_effect = lambda nid: next(n.rel_path for n in nodes if n.id == nid)
+
+    client = MegaClient()
+    client._client = MagicMock()
+    client._client.logged_in = True
+    client.get_public_filesystem = AsyncMock(return_value=mock_fs)
+
+    # Track order of download calls
+    downloaded_order = []
+
+    async def mock_download_file(file_info, crypto, output_path):
+        downloaded_order.append(str(output_path))
+        return output_path
+
+    client._client._core.request_file_info = AsyncMock(return_value=MagicMock())
+    client._client._core.download_file = AsyncMock(side_effect=mock_download_file)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dest = Path(tmpdir)
+        results = await client.download_public_folder("sample_handle", "sample_key", output_dir=dest)
+
+        assert len(results.success) == 4
+        assert len(results.fails) == 0
+
+        # Verify exact natural sorted order from beginning to end
+        assert downloaded_order == [
+            str(dest / "root_file.mp4"),
+            str(dest / "subfolder/file1.mp4"),
+            str(dest / "subfolder/file2.mp4"),
+            str(dest / "subfolder/file10.mp4"),
+        ]
+
+

@@ -6,9 +6,8 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
-
 from mega import progress
-
+from ..utils.sorting import natural_path_sort_key
 from .client import MegaClient, is_mega_url
 
 log = logging.getLogger(__name__)
@@ -121,5 +120,8 @@ class MegaDownloader:
             if self._own_client:
                 await self.client.close()
 
-        downloaded_files = sorted(p for p in dest_dir.rglob("*") if p.is_file())
+        downloaded_files = sorted(
+            (p for p in dest_dir.rglob("*") if p.is_file()),
+            key=natural_path_sort_key,
+        )
         return downloaded_files

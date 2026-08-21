@@ -19,6 +19,7 @@ from pyrogram.types import (
 
 from ..config import settings
 from ..db import JobStatus, JobStore
+from ..utils.sorting import natural_path_sort_key
 from .state import JobState
 from .status import (
     compile_archive_prompt_text,
@@ -689,9 +690,7 @@ class QueueManager:
                     job_state.trigger_event.set()
 
                 downloader = MegaDownloader(user_id=chat_id, progress_callback=on_mega_progress)
-                await downloader.download_link(job.url, dest_dir)
-
-                final_files = [p for p in dest_dir.rglob("*") if p.is_file()]
+                final_files = await downloader.download_link(job.url, dest_dir)
                 result = DownloadResult(ok=True, files=final_files)
 
             elif is_torrent:
@@ -1186,9 +1185,9 @@ class QueueManager:
             try:
                 files = []
                 if dest_dir.exists():
-                    files.extend(sorted(p for p in dest_dir.rglob("*") if p.is_file() and not should_ignore_file(p)))
+                    files.extend(sorted((p for p in dest_dir.rglob("*") if p.is_file() and not should_ignore_file(p)), key=natural_path_sort_key))
                 if extract_dir.exists():
-                    files.extend(sorted(p for p in extract_dir.rglob("*") if p.is_file() and not should_ignore_file(p)))
+                    files.extend(sorted((p for p in extract_dir.rglob("*") if p.is_file() and not should_ignore_file(p)), key=natural_path_sort_key))
             except Exception as e:
                 log.debug("Error listing files for upload in job #%s: %s", job.id, e)
                 return

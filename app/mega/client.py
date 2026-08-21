@@ -5,9 +5,11 @@ from pathlib import Path
 
 import aiohttp
 from mega.client import MegaNzClient
+from mega.download import DownloadResults
 from mega.filesystem import FileSystem
 
 from ..config import settings
+from ..utils.sorting import natural_path_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -131,20 +133,55 @@ class MegaClient:
         public_key: str,
         output_dir: str | Path | None = None,
         root_id: str | None = None,
-    ):
-        """Download a public folder preserving directory structure."""
+    ) -> DownloadResults:
+        """Download a public folder preserving directory structure in serial natural sorted order."""
         await self.ensure_logged_in()
-        return await self._client.download_public_folder(
-            public_handle, public_key, output_dir=output_dir, root_id=root_id
-        )
+        fs = await self.get_public_filesystem(public_handle, public_key)
+
+        base_path = Path(output_dir or ".")
+        folder_url = f"https://mega.nz/folder/{public_handle}#{public_key}"
+
+        nodes = list(fs.files_from(root_id))
+        nodes.sort(key=lambda n: natural_path_sort_key(fs.relative_path(n.id)))
+
+        results: dict[str, Path | Exception] = {}
+        for file in nodes:
+            web_url = f"{folder_url}/file/{file.id}"
+            output_path = base_path / fs.relative_path(file.id)
+            try:
+                file_info = await self._client._core.request_file_info(file.id, public_handle)
+                result = await self._client._core.download_file(file_info, file._crypto, output_path)
+                results[file.id] = result
+            except Exception as exc:
+                log.error("Unable to download %s to '%s': %s", web_url, output_path, exc)
+                results[file.id] = exc
+
+        res = DownloadResults.split(results)
+        if results and len(res.success) == 0 and len(res.fails) > 0:
+            first_err = next(iter(res.fails.values()))
+            raise first_err
+        return res
 
     async def download_url(
         self,
         url: str,
         output_dir: str | Path | None = None,
-    ):
-        """Download a public file or folder by URL."""
+    ) -> DownloadResults:
+        """Download a public file or folder by URL in serial natural sorted order."""
         await self.ensure_logged_in()
         clean_url = url.strip()
         clean_url = clean_url.removeprefix("mega:")
-        return await self._client.download_url(clean_url, output_dir=output_dir)
+        info = self.parse_url(clean_url)
+        if not info.is_folder:
+            try:
+                result = await self.download_public_file(info.public_handle, info.public_key, output_dir)
+            except Exception as exc:
+                result = exc
+            res = DownloadResults.split({info.public_handle: result})
+            if isinstance(result, Exception):
+                raise result
+            return res
+
+        return await self.download_public_folder(
+            info.public_handle, info.public_key, output_dir=output_dir, root_id=info.selected_node
+        )

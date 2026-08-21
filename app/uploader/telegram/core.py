@@ -54,8 +54,7 @@ class UploadTooLarge(Exception):
     pass
 
 
-def natural_sort_key(s: str) -> list[int | str]:
-    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+from ...utils.sorting import natural_path_sort_key, natural_sort_key
 
 
 class TelegramUploader:
