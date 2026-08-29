@@ -15,6 +15,7 @@ import aiohttp
 from aiofiles import open as aiopen
 
 from ...config import settings
+from ...utils.sorting import natural_path_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -426,6 +427,17 @@ class DirectDownloader:
         if not items:
             raise DirectDownloadError("No direct URLs provided for download.")
 
+        def _item_natural_key(it: dict[str, str]):
+            fn = it.get("filename") or ""
+            sub = it.get("path") or ""
+            if fn or sub:
+                return natural_path_sort_key(Path(sub) / fn)
+            parsed_path = Path(urlparse(it["url"]).path).name
+            return natural_path_sort_key(parsed_path or it["url"])
+
+        if len(items) > 1:
+            items.sort(key=_item_natural_key)
+
         async with aiohttp.ClientSession(
             connector=get_aiohttp_connector(),
             timeout=aiohttp.ClientTimeout(total=None, connect=30.0)
@@ -457,6 +469,7 @@ class DirectDownloader:
         if self.failed_count == len(items) and len(items) > 0:
             raise DirectDownloadError(f"All {len(items)} direct file downloads failed.")
 
+        self.downloaded_files.sort(key=natural_path_sort_key)
         return self.downloaded_files
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ...config import settings
 from ...pacing import Backoff, looks_rate_limited, parse_speed_limit
+from ...utils.sorting import natural_path_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ async def run_with_progress(
         if not urls:
             urls = [raw]
 
+    if len(urls) > 1:
+        urls.sort(key=natural_path_sort_key)
+
     dest_dir.mkdir(parents=True, exist_ok=True)
     attempts = 0
     last_stderr = ""
@@ -372,7 +376,9 @@ async def run_with_progress(
                 except Exception as de:
                     log.warning("DirectDownloader fallback also failed for URL %s: %s", single_url, de)
 
-    files = sorted(p for p in dest_dir.rglob("*") if p.is_file())
+    files = sorted(
+        (p for p in dest_dir.rglob("*") if p.is_file()),
+        key=natural_path_sort_key,
+    )
     ok = (success_count == total_urls and len(files) > 0) or (len(files) > 0)
-    return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)
     return DownloadResult(ok=ok, files=files, error_tail=last_stderr, attempts=attempts)

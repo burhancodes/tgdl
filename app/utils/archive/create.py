@@ -11,6 +11,7 @@ import patoolib
 from patoolib.util import PatoolError
 
 from ...config import settings
+from ..sorting import natural_path_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ async def archive_folder_async(
             if proc.returncode == 0:
                 output_archive.unlink(missing_ok=True)
                 prefix_name = f"{folder_name}_parts.{fmt}"
-                for p in sorted(parent_dir.iterdir()):
+                for p in sorted(parent_dir.iterdir(), key=natural_path_sort_key):
                     if p.is_file() and (p.name == prefix_name or p.name.startswith(f"{prefix_name}.")):
                         telegram_archives.append(p)
 
@@ -178,14 +179,13 @@ async def archive_folder_async(
             await proc.communicate()
             if proc.returncode == 0:
                 output_archive.unlink(missing_ok=True)
-                for p in sorted(parent_dir.iterdir()):
+                for p in sorted(parent_dir.iterdir(), key=natural_path_sort_key):
                     if p.is_file() and p.name.startswith(split_prefix):
                         telegram_archives.append(p)
 
     if not telegram_archives:
         telegram_archives = [output_archive]
 
-    # Background Pixeldrain upload logic
     if (upload_unsplit_to_pd or upload_parts_to_pd) and telegram_archives:
         files_to_upload = telegram_archives if upload_parts_to_pd else [output_archive]
         log.info(

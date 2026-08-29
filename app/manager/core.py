@@ -674,9 +674,7 @@ class QueueManager:
                     from ..uploader import upload_to_pixeldrain
                     domain = settings.pixeldrain_domain or "pixeldrain.com"
                     log.info("Mirroring downloaded GDrive files to Pixeldrain for job #%s", job.id)
-                    for f in sorted(dest_dir.rglob("*")):
-                        if not f.is_file():
-                            continue
+                    for f in sorted((p for p in dest_dir.rglob("*") if p.is_file()), key=natural_path_sort_key):
                         try:
                             res, _ = await upload_to_pixeldrain(
                                 f, api_key=settings.pixeldrain_api_key, domain=domain
@@ -1907,7 +1905,6 @@ class QueueManager:
                 await self.store.update_progress(job.id, sent_files=job_state.sent, skipped_files=len(job_state.skipped))
                 job_state.trigger_event.set()
 
-                # Decay delay multiplier slowly on successful upload
                 self.upload_delay_multiplier = max(self.upload_delay_multiplier - 0.05, 1.0)
 
                 job_state.session_uploaded_count += 1
@@ -1932,7 +1929,7 @@ class QueueManager:
             if is_torrent:
                 try:
                     if dest_dir.exists():
-                        files = sorted(p for p in dest_dir.rglob("*") if p.is_file() and not should_ignore_file(p))
+                        files = sorted((p for p in dest_dir.rglob("*") if p.is_file() and not should_ignore_file(p)), key=natural_path_sort_key)
                         for f in files:
                             db_job = await self.store.get_job(job.id)
                             if not db_job or db_job.status == JobStatus.CANCELLED or job_state.uploader_done.is_set():

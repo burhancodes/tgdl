@@ -8,6 +8,7 @@ from pathlib import Path
 
 from googleapiclient.http import MediaIoBaseDownload
 
+from ..utils.sorting import natural_path_sort_key
 from .client import (
     EXPORT_MAP,
     G_DRIVE_DIR_MIME_TYPE,
@@ -59,6 +60,9 @@ class GoogleDriveDownloader:
         if not urls:
             urls = [link_or_id.strip()]
 
+        if len(urls) > 1:
+            urls.sort(key=natural_path_sort_key)
+
         res_paths: list[Path] = []
         failed_count = 0
         last_err = None
@@ -95,22 +99,48 @@ class GoogleDriveDownloader:
                 raise last_err
             raise RuntimeError(f"All {len(urls)} Google Drive downloads failed.")
 
-        return res_paths[0] if len(res_paths) == 1 else res_paths
+        downloaded_files = sorted(
+            (p for p in dest_dir.rglob("*") if p.is_file()),
+            key=natural_path_sort_key,
+        )
+        if len(res_paths) == 1:
+            return res_paths[0]
+        return downloaded_files if downloaded_files else res_paths
 
-    async def _download_folder(self, folder_id: str, folder_path: Path) -> None:
-        folder_path.mkdir(parents=True, exist_ok=True)
+    async def _collect_folder_items(
+        self, folder_id: str, rel_path: Path
+    ) -> tuple[list[tuple[dict, Path]], list[Path]]:
+        """Recursively collect all files with relative paths, and all directory relative paths."""
+        files: list[tuple[dict, Path]] = []
+        dirs: list[Path] = [rel_path] if str(rel_path) != "." else []
         items = await asyncio.to_thread(self.client.list_folder_contents, folder_id)
-
         for item in items:
             mime = item.get("mimeType", "")
             safe_name = sanitize_filename(item.get("name", item["id"]))
+            item_rel_path = rel_path / safe_name
             if mime == G_DRIVE_DIR_MIME_TYPE:
-                subfolder_path = folder_path / safe_name
-                await self._download_folder(item["id"], subfolder_path)
+                sub_files, sub_dirs = await self._collect_folder_items(item["id"], item_rel_path)
+                files.extend(sub_files)
+                dirs.extend(sub_dirs)
             else:
                 item_copy = dict(item)
                 item_copy["name"] = safe_name
-                await self._download_file(item_copy, folder_path)
+                files.append((item_copy, item_rel_path))
+        return files, dirs
+
+    async def _download_folder(self, folder_id: str, folder_path: Path) -> None:
+        folder_path.mkdir(parents=True, exist_ok=True)
+        files, dirs = await self._collect_folder_items(folder_id, Path())
+
+        for d in dirs:
+            (folder_path / d).mkdir(parents=True, exist_ok=True)
+
+        files.sort(key=lambda x: natural_path_sort_key(x[1]))
+
+        for item_meta, rel_path in files:
+            target_parent = folder_path / rel_path.parent
+            target_parent.mkdir(parents=True, exist_ok=True)
+            await self._download_file(item_meta, target_parent)
 
     async def _download_file(self, meta: dict, parent_dir: Path) -> Path:
         file_id = meta["id"]

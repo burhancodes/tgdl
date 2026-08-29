@@ -10,6 +10,8 @@ from typing import Any
 import webhost
 from webhost.exceptions import WebHostError
 
+from ...utils.sorting import natural_path_sort_key
+
 log = logging.getLogger(__name__)
 
 
@@ -116,7 +118,7 @@ class FileDitchUploader:
         if self.path.is_file():
             files.append(self.path)
         else:
-            for p in sorted(self.path.rglob("*")):
+            for p in sorted(self.path.rglob("*"), key=natural_path_sort_key):
                 if p.is_file() and not p.name.startswith("."):
                     files.append(p)
 

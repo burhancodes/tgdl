@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
+from app.utils.sorting import natural_path_sort_key
 
 log = logging.getLogger(__name__)
 
@@ -318,10 +319,13 @@ async def download_via_aria2_async(
 
     files = []
     if ok and dest_dir.exists():
-        files = [
-            p for p in dest_dir.rglob("*")
-            if p.is_file() and not p.name.endswith(".part") and not p.name.endswith(".aria2")
-        ]
+        files = sorted(
+            [
+                p for p in dest_dir.rglob("*")
+                if p.is_file() and not p.name.endswith(".part") and not p.name.endswith(".aria2")
+            ],
+            key=natural_path_sort_key,
+        )
 
     return DownloadResult(ok=ok, files=files, error_tail=error_tail, attempts=1)
 
