@@ -274,6 +274,18 @@ class QueueManager:
             except Exception as e:
                 log.debug("Failed parsing job.args JSON for job #%s: %s", job.id, e)
 
+        raw_uid = args_dict.get("user_id")
+        job_user_id: int | str | None = None
+        if raw_uid is not None:
+            try:
+                uid_int = int(raw_uid)
+                if uid_int > 0:
+                    job_user_id = uid_int
+            except (ValueError, TypeError):
+                raw_str = str(raw_uid).strip()
+                if raw_str and not raw_str.startswith("-"):
+                    job_user_id = raw_str
+
         async def report(text: str) -> None:
             await safe_send(self.client, chat_id, text, link_preview_options=LinkPreviewOptions(is_disabled=True))
 
@@ -553,7 +565,7 @@ class QueueManager:
                 reply_msg_id = args_dict.get("reply_message_id")
                 target_url = args_dict.get("target_url")
                 orig_filename = args_dict.get("original_filename") or "app.apk"
-                user_id = args_dict.get("user_id") or chat_id
+                user_id = job_user_id
 
                 patch_work_dir = (dest_dir.parent / f"{dest_dir.name}_patch_work").resolve()
                 patch_work_dir.mkdir(parents=True, exist_ok=True)
@@ -634,7 +646,7 @@ class QueueManager:
 
                 archive_fmt = args_dict.get("archive_format")
                 mirror_pixeldrain = bool(args_dict.get("mirror_pixeldrain"))
-                gdrive_user_id = args_dict.get("user_id") or chat_id
+                gdrive_user_id = job_user_id
 
                 downloader = GoogleDriveDownloader(user_id=gdrive_user_id, progress_callback=on_gdrive_progress)
 
@@ -689,7 +701,7 @@ class QueueManager:
                     job_state.current_download_file = filename
                     job_state.trigger_event.set()
 
-                downloader = MegaDownloader(user_id=chat_id, progress_callback=on_mega_progress)
+                downloader = MegaDownloader(user_id=job_user_id, progress_callback=on_mega_progress)
                 final_files = await downloader.download_link(job.url, dest_dir)
                 result = DownloadResult(ok=True, files=final_files)
 
@@ -834,7 +846,7 @@ class QueueManager:
                             dest_dir,
                             on_progress=on_dl_progress,
                             register_proc=reg,
-                            user_id=job.chat_id,
+                            user_id=job_user_id,
                         )
                         if not result.ok:
                             log.warning("gallery-dl failed for mirror link %s, attempting cyberdrop-dl fallback", target_u)
@@ -843,7 +855,7 @@ class QueueManager:
                                 dest_dir,
                                 on_progress=on_dl_progress,
                                 register_proc=reg,
-                                user_id=job.chat_id,
+                                user_id=job_user_id,
                             )
 
             elif cleaned_url.startswith(("cdl:", "cyberdrop-dl:")) or args_dict.get("engine") == "cyberdrop-dl":
@@ -890,7 +902,7 @@ class QueueManager:
                     on_progress=on_cdl_progress,
                     extra_args=extra_args_list if extra_args_list else None,
                     register_proc=reg,
-                    user_id=job.chat_id,
+                    user_id=job_user_id,
                 )
                 if not result.ok:
                     log.info("cyberdrop-dl failed for %s. Attempting gallery-dl fallback...", target_u)
@@ -900,7 +912,7 @@ class QueueManager:
                         on_progress=on_cdl_progress,
                         extra_args=extra_args_list if extra_args_list else None,
                         register_proc=reg,
-                        user_id=job.chat_id,
+                        user_id=job_user_id,
                     )
                 if not result.ok:
                     log.info("gallery-dl fallback also failed for %s. Falling back to DirectDownloader...", target_u)
@@ -1018,7 +1030,7 @@ class QueueManager:
                         on_progress=on_download_progress,
                         extra_args=extra_args_list if extra_args_list else None,
                         register_proc=reg,
-                        user_id=job.chat_id,
+                        user_id=job_user_id,
                     )
                     if not result.ok:
                         log.info("gallery-dl failed or unsupported site for %s. Attempting cyberdrop-dl immediate fallback...", job.url)
@@ -1028,7 +1040,7 @@ class QueueManager:
                             on_progress=on_download_progress,
                             extra_args=extra_args_list if extra_args_list else None,
                             register_proc=reg,
-                            user_id=job.chat_id,
+                            user_id=job_user_id,
                         )
                     if not result.ok:
                         log.info("cyberdrop-dl fallback also failed for %s. Falling back to DirectDownloader...", job.url)

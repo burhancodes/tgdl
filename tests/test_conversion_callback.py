@@ -120,6 +120,7 @@ async def test_process_upload_finally_cleanup_no_importerror(tmp_path: Path):
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     job_state = JobState(job=job, dest_dir=dest_dir)
+    job_state.downloader_done.set()
     qm.jobs[job.id] = job_state
 
     # Populate session stores
@@ -154,20 +155,22 @@ async def test_automatic_video_conversion_no_nameerror(tmp_path: Path):
     dest_dir = tmp_path / "downloads" / job.download_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create dummy video file with CONVERSION_EXT (.mkv)
-    dummy_video = dest_dir / "sample.mkv"
+    # Create dummy video file with CONVERSION_EXT (.mov)
+    dummy_video = dest_dir / "sample.mov"
     dummy_video.write_bytes(b"dummy video data")
 
     job_state = JobState(job=job, dest_dir=dest_dir)
+    job_state.downloader_done.set()
     qm.jobs[job.id] = job_state
 
     # Mock conversion and upload functions to avoid real FFmpeg / Telegram calls
-    with patch("app.manager.core.convert_video_async", new=AsyncMock(return_value=True)), \
-         patch("app.manager.core.handle_large_file", new=AsyncMock(side_effect=lambda f, s: [f])), \
-         patch("app.uploader.telegram.core.upload_file", new=AsyncMock(return_value=True)):
+    with patch.object(conversion_session_store, "add_converted_file", wraps=conversion_session_store.add_converted_file) as mock_add, \
+         patch("app.utils.media.convert_media_async", new=AsyncMock(return_value=True)), \
+         patch("app.uploader.handle_large_file", new=AsyncMock(side_effect=lambda f, s: [f])), \
+         patch("app.manager.core.safe_send", new=AsyncMock()), \
+         patch("app.uploader.upload_file", new=AsyncMock(return_value=True)):
         await qm._process_upload(job_state)
 
-    # Assert conversion_session_store contains converted file name and no NameError occurred
-    assert "sample.mkv" in conversion_session_store.get_converted_files(job.id)
+    mock_add.assert_called_once_with(job.id, "sample.mov")
 
     await store.close()

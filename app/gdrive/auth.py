@@ -77,7 +77,17 @@ class GoogleDriveAuthManager:
         accounts_dir: Path | None = None,
         use_sa: bool | None = None,
     ):
-        self.user_id = str(user_id) if user_id else None
+        clean_uid = None
+        if user_id is not None:
+            try:
+                uid_int = int(user_id)
+                if uid_int > 0:
+                    clean_uid = str(uid_int)
+            except (ValueError, TypeError):
+                uid_str = str(user_id).strip()
+                if uid_str and not uid_str.startswith("-"):
+                    clean_uid = uid_str
+        self.user_id = clean_uid
         if self.user_id and not token_path and not accounts_dir:
             user_dir = get_user_auth_dir(self.user_id)
             self.token_path = user_dir / "token.json"

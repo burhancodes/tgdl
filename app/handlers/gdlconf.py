@@ -254,7 +254,10 @@ def register_gdlconf_handlers(app: Client) -> None:
 
     @app.on_message(filters.command(["gdlconf", "gdl_config"]) & authorized_filter)
     async def gdlconf_cmd(_, message: Message) -> None:
-        user_id = message.from_user.id if message.from_user else message.chat.id
+        user_id = message.from_user.id if getattr(message, "from_user", None) and message.from_user else None
+        if not user_id or user_id <= 0:
+            await message.reply_text("Could not determine your user ID. Configuration must be performed by an identified user.")
+            return
         args = message.text.split(maxsplit=1)
         subcommand = args[1].strip().lower() if len(args) > 1 else ""
 

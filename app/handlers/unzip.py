@@ -152,7 +152,11 @@ def register_unzip_handlers(app: Client) -> None:
         password = args_text or None
         target_url = f"unzip:{doc.file_name}"
         import json
-        args_json = json.dumps({"reply_message_id": message.reply_to_message.id, "password": password})
+        unzip_args = {"reply_message_id": message.reply_to_message.id, "password": password}
+        sender_uid = getattr(message.from_user, "id", None) if getattr(message, "from_user", None) and message.from_user else None
+        if sender_uid and sender_uid > 0:
+            unzip_args["user_id"] = sender_uid
+        args_json = json.dumps(unzip_args)
         job = await store.create_job(message.chat.id, target_url, split_large_files=1, args=args_json)
         await store.update_progress(job.id, status="waiting")
 

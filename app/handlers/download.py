@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -156,6 +157,7 @@ async def _create_and_enqueue_job(
     password: str | None = None,
     engine: str | None = None,
     aria_options: dict | None = None,
+    user_id: int | str | None = None,
 ) -> None:
     active_jobs = queue_manager.get_active_jobs_for_chat(chat_id)
     if settings.max_jobs_per_chat > 0 and len(active_jobs) >= settings.max_jobs_per_chat:
@@ -165,7 +167,29 @@ async def _create_and_enqueue_job(
         )
         return
 
+    resolved_user_id: int | str | None = None
+    if user_id is not None:
+        try:
+            uid_val = int(user_id)
+            if uid_val > 0:
+                resolved_user_id = uid_val
+        except (ValueError, TypeError):
+            uid_str = str(user_id).strip()
+            if uid_str and not uid_str.startswith("-"):
+                resolved_user_id = uid_str
+    if resolved_user_id is None and getattr(message, "from_user", None) and message.from_user:
+        f_uid = getattr(message.from_user, "id", None)
+        if f_uid is not None:
+            try:
+                f_uid_int = int(f_uid)
+                if f_uid_int > 0:
+                    resolved_user_id = f_uid_int
+            except (ValueError, TypeError):
+                pass
+
     args_dict = {}
+    if resolved_user_id is not None:
+        args_dict["user_id"] = resolved_user_id
     if is_mirror:
         args_dict["is_mirror"] = True
     if upload_tg:
@@ -864,11 +888,83 @@ def register_download_handlers(app: Client) -> None:
 
     @app.on_message(filters.command(["gd2tg"]) & authorized_filter)
     async def gd2tg_cmd(client: Client, message: Message) -> None:
-        parts = message.text.split(maxsplit=1)
+        sender_id = getattr(message.from_user, "id", None) if getattr(message, "from_user", None) and message.from_user else None
+
+        if message.reply_to_message and message.reply_to_message.document:
+            if not sender_id or sender_id <= 0:
+                await message.reply_text("Could not determine your user ID. Credential upload must be performed by an identified user.")
+                return
+
+            reply_doc = message.reply_to_message.document
+            fname = (reply_doc.file_name or "").lower()
+            if not fname.endswith(".json"):
+                await message.reply_text("Please upload a valid `.json` credential or token file.")
+                return
+
+            status_msg = await message.reply_text("Downloading & processing GDrive credential file...")
+            temp_path = await message.reply_to_message.download()
+            if not temp_path or not Path(temp_path).exists():
+                await status_msg.edit_text("Failed to download credential file.")
+                return
+
+            try:
+                content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                data = json.loads(content)
+                if not isinstance(data, dict):
+                    raise ValueError("JSON must be an object")
+
+                user_auth_dir = settings.auth_dir / str(sender_id)
+                user_auth_dir.mkdir(parents=True, exist_ok=True)
+
+                if data.get("type") == "service_account":
+                    sa_dir = user_auth_dir / "accounts"
+                    sa_dir.mkdir(parents=True, exist_ok=True)
+                    safe_name = Path(reply_doc.file_name or "service_account.json").name
+                    dest_file = sa_dir / safe_name
+                    dest_file.write_text(content, encoding="utf-8")
+                    os.chmod(dest_file, 0o600)
+                    await status_msg.edit_text(
+                        f"✓ Service Account JSON saved for user `{sender_id}` to `{dest_file.name}`.\n"
+                        f"You can now use `/gd2tg <link>` to download Google Drive links!"
+                    )
+                    return
+                elif "token" in data or "refresh_token" in data:
+                    dest_file = user_auth_dir / "token.json"
+                    dest_file.write_text(content, encoding="utf-8")
+                    os.chmod(dest_file, 0o600)
+                    await status_msg.edit_text(
+                        f"✓ OAuth token saved for user `{sender_id}` (`token.json`).\n"
+                        f"You can now use `/gd2tg <link>` to download Google Drive links!"
+                    )
+                    return
+                elif "installed" in data or "web" in data or "client_id" in data:
+                    dest_file = user_auth_dir / "credentials.json"
+                    dest_file.write_text(content, encoding="utf-8")
+                    os.chmod(dest_file, 0o600)
+                    await status_msg.edit_text(
+                        f"✓ OAuth client credentials saved for user `{sender_id}` (`credentials.json`)."
+                    )
+                    return
+                else:
+                    await status_msg.edit_text(
+                        "Unrecognized JSON structure. Expected a Google Cloud Service Account JSON key "
+                        "or OAuth token (`token.json` / `credentials.json`)."
+                    )
+                    return
+            except Exception as e:
+                log.exception("Failed to process uploaded GDrive credential file: %s", e)
+                await status_msg.edit_text(f"Failed to process credential file: {e}")
+                return
+            finally:
+                if temp_path and Path(temp_path).exists():
+                    Path(temp_path).unlink(missing_ok=True)
+
+        # Case 2: Standard URL command
+        parts = (message.text or message.caption or "").split(maxsplit=1)
         if len(parts) < 2:
-            await message.reply_text("Provide a Google Drive link: `/gd2tg <gdrive_link>`.")
+            await message.reply_text("Provide a Google Drive link: `/gd2tg <gdrive_link>` or reply to a JSON credential file.")
             return
 
         raw_link = parts[1].strip()
         link = f"gd2tg:{raw_link}"
-        await _create_and_enqueue_job(client, message.chat.id, link, message, raw_link)
+        await _create_and_enqueue_job(client, message.chat.id, link, message, raw_link, user_id=sender_id)

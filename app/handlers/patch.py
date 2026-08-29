@@ -32,7 +32,11 @@ def register_patch_handlers(app: Client) -> None:
 
     @app.on_message(filters.command(["setkeystore", "keystore"]) & authorized_filter)
     async def set_keystore_cmd(_, message: Message) -> None:
-        user_id = message.from_user.id if message.from_user else message.chat.id
+        user_id = message.from_user.id if getattr(message, "from_user", None) and message.from_user else None
+        if not user_id or user_id <= 0:
+            await message.reply_text("Could not determine your user ID. Keystore configuration must be performed by an identified user.")
+            return
+
         user_dir = (settings.auth_dir / str(user_id)).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,7 +137,10 @@ def register_patch_handlers(app: Client) -> None:
     @app.on_message(filters.command("patch") & authorized_filter)
     async def patch_cmd(_, message: Message) -> None:
         chat_id = message.chat.id
-        user_id = message.from_user.id if message.from_user else chat_id
+        user_id = message.from_user.id if getattr(message, "from_user", None) and message.from_user else None
+        if not user_id or user_id <= 0:
+            await message.reply_text("Could not determine your user ID. APK patching must be performed by an identified user.")
+            return
 
         # Check if user has a keystore configured
         ks_info = settings.get_user_keystore_info(user_id)
