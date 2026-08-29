@@ -53,7 +53,9 @@ def _parse_flags(text_tokens: list[str]) -> tuple[bool, bool, bool, str | None, 
                 i += 1
         elif any(low.startswith(prefix) for prefix in ("-p=", "-pass=", "--pass=", "--password=")):
             password = token.split("=", 1)[1].strip() or None
-        elif token.startswith(("http://", "https://", "magnet:")):
+        elif token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:")) or any(token.lower().startswith(d) for d in ("drive.google.com", "docs.google.com", "mega.nz", "mega.co.nz", "mega.io", "gofile.io", "gofile.co")):
+            if not token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:")):
+                token = f"https://{token}"
             urls.append(token)
         i += 1
 
@@ -469,7 +471,8 @@ def register_download_handlers(app: Client) -> None:
     @app.on_message(filters.command(["mega", "meganz"]) & authorized_filter)
     async def mega_cmd(client: Client, message: Message) -> None:
         text_tokens = message.text.split() if message.text else []
-        user_id = message.from_user.id if message.from_user else message.chat.id
+        sender_id = message.from_user.id if message.from_user else None
+        user_id = sender_id
 
         if len(text_tokens) > 1:
             first_arg = text_tokens[1].strip()
@@ -552,7 +555,9 @@ def register_download_handlers(app: Client) -> None:
                         content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
                         for line in content.splitlines():
                             line = line.strip()
-                            if line.startswith(("http://", "https://")):
+                            if line.startswith(("http://", "https://", "mega:")) or any(d in line.lower() for d in ("mega.nz", "mega.co.nz", "mega.io")):
+                                if not line.startswith(("http://", "https://", "mega:")):
+                                    line = f"https://{line}"
                                 urls.append(line)
                     except Exception as e:
                         log.warning("Failed reading replied txt file for mega_cmd: %s", e)
@@ -563,7 +568,9 @@ def register_download_handlers(app: Client) -> None:
             if reply_text and not urls:
                 for token in reply_text.split():
                     token = token.strip()
-                    if token.startswith(("http://", "https://")):
+                    if token.startswith(("http://", "https://", "mega:")) or any(d in token.lower() for d in ("mega.nz", "mega.co.nz", "mega.io")):
+                        if not token.startswith(("http://", "https://", "mega:")):
+                            token = f"https://{token}"
                         urls.append(token)
 
         if not urls:
@@ -589,7 +596,8 @@ def register_download_handlers(app: Client) -> None:
         display_text = f"{prefix} `{urls[0]}`" if len(urls) == 1 else f"{prefix} `{urls[0]}` (+ {len(urls) - 1} more)"
         await _create_and_enqueue_job(
             client, message.chat.id, urls_json, message, display_text,
-            is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password
+            is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password,
+            user_id=sender_id,
         )
 
 
@@ -804,10 +812,42 @@ def register_download_handlers(app: Client) -> None:
 
     @app.on_message(filters.command(["gfup", "gofile", "gfdl", "gf2tg"]) & authorized_filter)
     async def gfup_cmd(client: Client, message: Message) -> None:
-        # If replying to media, perform upload
+        sender_id = message.from_user.id if message.from_user else None
+        text_tokens = (message.text or message.caption or "").split()
+        is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
+        urls: list[str] = []
+
         if message.reply_to_message:
             reply_msg = message.reply_to_message
-            if reply_msg.document or reply_msg.video or reply_msg.photo or reply_msg.audio or reply_msg.voice:
+
+            # Case A: Replying to a .txt file with GoFile links
+            if reply_msg.document and (
+                (reply_msg.document.file_name and reply_msg.document.file_name.endswith(".txt")) or
+                (reply_msg.document.mime_type and reply_msg.document.mime_type.startswith("text/"))
+            ):
+                temp_path = await reply_msg.download()
+                if temp_path and Path(temp_path).exists():
+                    try:
+                        content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if line.startswith(("http://", "https://", "gofile:", "gf:")) or is_gofile_url(line):
+                                urls.append(line)
+                    except Exception as e:
+                        log.warning("Failed reading replied txt file for gofile_cmd: %s", e)
+                    finally:
+                        Path(temp_path).unlink(missing_ok=True)
+
+            # Case B: Replying to text or caption
+            reply_text = reply_msg.text or reply_msg.caption
+            if reply_text and not urls:
+                for token in reply_text.split():
+                    token = token.strip()
+                    if token.startswith(("http://", "https://", "gofile:", "gf:")) or is_gofile_url(token):
+                        urls.append(token)
+
+            # Case C: Replying to media to upload to GoFile (only if no download URLs were extracted)
+            if not urls and (reply_msg.document or reply_msg.video or reply_msg.photo or reply_msg.audio or reply_msg.voice):
                 status_msg = await message.reply_text("Downloading media file for GoFile upload...")
                 temp_dir = settings.data_dir / "temp_gfup"
                 temp_dir.mkdir(parents=True, exist_ok=True)
@@ -820,7 +860,6 @@ def register_download_handlers(app: Client) -> None:
                 local_path = Path(file_path_str)
                 try:
                     await status_msg.edit_text(f"Uploading `{local_path.name}` to GoFile...")
-                    sender_id = message.from_user.id if message.from_user else None
                     res, _ = await upload_to_gofile(local_path, user_id=sender_id)
 
                     if isinstance(res, dict) and res.get("status") == "ok":
@@ -841,38 +880,39 @@ def register_download_handlers(app: Client) -> None:
                         local_path.unlink(missing_ok=True)
                 return
 
-        # If a URL is provided, enqueue a download job
-        text_tokens = (message.text or "").split()
-        if len(text_tokens) > 1:
-            is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
-            target_url = parsed_urls[0] if parsed_urls else text_tokens[1]
-            sender_id = message.from_user.id if message.from_user else None
+        if not urls:
+            urls = parsed_urls
 
-            prefix_parts = []
-            if is_mirror:
-                prefix_parts.append("mirror")
-            if unzip:
-                prefix_parts.append("unzip")
-            prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
-            display_text = f"gofile{prefix_str}: {target_url}"
-
-            await _create_and_enqueue_job(
-                client,
-                message.chat.id,
-                f"gofile:{target_url}",
-                message,
-                display_text,
-                is_mirror=is_mirror,
-                upload_tg=upload_tg,
-                unzip=unzip,
-                password=password,
-                user_id=sender_id,
+        if not urls:
+            await message.reply_text(
+                "Provide a GoFile link or reply to a text/message containing GoFile URLs:\n"
+                "• `/gofile [-m|-mirror] [-tg] [-uz] [-p password] <url>` (or `/gfdl`, `/gf2tg`)\n"
+                "• Reply with `/gofile [-uz]` to a text message or `.txt` file containing GoFile links\n"
+                "• Reply to a media file with `/gfup` or `/gofile` to upload it to GoFile."
             )
             return
 
-        await message.reply_text(
-            "Please provide a GoFile link to download (e.g. `/gofile <url>` or `/gfdl <url>`), "
-            "or reply to a media message with `/gfup` to upload it to GoFile."
+        urls_json = json.dumps([f"gofile:{u}" for u in urls]) if len(urls) > 1 else f"gofile:{urls[0]}"
+        prefix_parts = []
+        if is_mirror:
+            prefix_parts.append("mirror")
+        if unzip:
+            prefix_parts.append("unzip")
+        prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
+        prefix = f"gofile{prefix_str}:"
+        display_text = f"{prefix} `{urls[0]}`" if len(urls) == 1 else f"{prefix} `{urls[0]}` (+ {len(urls) - 1} more)"
+
+        await _create_and_enqueue_job(
+            client,
+            message.chat.id,
+            urls_json,
+            message,
+            display_text,
+            is_mirror=is_mirror,
+            upload_tg=upload_tg,
+            unzip=unzip,
+            password=password,
+            user_id=sender_id,
         )
 
     @app.on_message(filters.command(["fdup", "fileditch"]) & authorized_filter)
@@ -917,85 +957,148 @@ def register_download_handlers(app: Client) -> None:
             if local_path.exists():
                 local_path.unlink(missing_ok=True)
 
-    @app.on_message(filters.command(["gd2tg"]) & authorized_filter)
+    @app.on_message(filters.command(["gd2tg", "gdrive", "gd"]) & authorized_filter)
     async def gd2tg_cmd(client: Client, message: Message) -> None:
         sender_id = getattr(message.from_user, "id", None) if getattr(message, "from_user", None) and message.from_user else None
+        text_tokens = (message.text or message.caption or "").split()
+        is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
+        urls: list[str] = []
 
-        if message.reply_to_message and message.reply_to_message.document:
-            if not sender_id or sender_id <= 0:
-                await message.reply_text("Could not determine your user ID. Credential upload must be performed by an identified user.")
-                return
+        if message.reply_to_message:
+            reply_msg = message.reply_to_message
 
-            reply_doc = message.reply_to_message.document
-            fname = (reply_doc.file_name or "").lower()
-            if not fname.endswith(".json"):
-                await message.reply_text("Please upload a valid `.json` credential or token file.")
-                return
+            # Case 1: Credential upload (.json file)
+            if reply_msg.document:
+                fname = (reply_msg.document.file_name or "").lower()
+                mime = (reply_msg.document.mime_type or "").lower()
+                if fname.endswith(".json") or mime == "application/json":
+                    if not sender_id or sender_id <= 0:
+                        await message.reply_text("Could not determine your user ID. Credential upload must be performed by an identified user.")
+                        return
 
-            status_msg = await message.reply_text("Downloading & processing GDrive credential file...")
-            temp_path = await message.reply_to_message.download()
-            if not temp_path or not Path(temp_path).exists():
-                await status_msg.edit_text("Failed to download credential file.")
-                return
+                    status_msg = await message.reply_text("Downloading & processing GDrive credential file...")
+                    temp_path = await message.reply_to_message.download()
+                    if not temp_path or not Path(temp_path).exists():
+                        await status_msg.edit_text("Failed to download credential file.")
+                        return
 
-            try:
-                content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
-                data = json.loads(content)
-                if not isinstance(data, dict):
-                    raise ValueError("JSON must be an object")
+                    try:
+                        content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                        data = json.loads(content)
+                        if not isinstance(data, dict):
+                            raise ValueError("JSON must be an object")
 
-                user_auth_dir = settings.auth_dir / str(sender_id)
-                user_auth_dir.mkdir(parents=True, exist_ok=True)
+                        user_auth_dir = settings.auth_dir / str(sender_id)
+                        user_auth_dir.mkdir(parents=True, exist_ok=True)
 
-                if data.get("type") == "service_account":
-                    sa_dir = user_auth_dir / "accounts"
-                    sa_dir.mkdir(parents=True, exist_ok=True)
-                    safe_name = Path(reply_doc.file_name or "service_account.json").name
-                    dest_file = sa_dir / safe_name
-                    dest_file.write_text(content, encoding="utf-8")
-                    os.chmod(dest_file, 0o600)
-                    await status_msg.edit_text(
-                        f"✓ Service Account JSON saved for user `{sender_id}` to `{dest_file.name}`.\n"
-                        f"You can now use `/gd2tg <link>` to download Google Drive links!"
-                    )
-                    return
-                elif "token" in data or "refresh_token" in data:
-                    dest_file = user_auth_dir / "token.json"
-                    dest_file.write_text(content, encoding="utf-8")
-                    os.chmod(dest_file, 0o600)
-                    await status_msg.edit_text(
-                        f"✓ OAuth token saved for user `{sender_id}` (`token.json`).\n"
-                        f"You can now use `/gd2tg <link>` to download Google Drive links!"
-                    )
-                    return
-                elif "installed" in data or "web" in data or "client_id" in data:
-                    dest_file = user_auth_dir / "credentials.json"
-                    dest_file.write_text(content, encoding="utf-8")
-                    os.chmod(dest_file, 0o600)
-                    await status_msg.edit_text(
-                        f"✓ OAuth client credentials saved for user `{sender_id}` (`credentials.json`)."
-                    )
-                    return
-                else:
-                    await status_msg.edit_text(
-                        "Unrecognized JSON structure. Expected a Google Cloud Service Account JSON key "
-                        "or OAuth token (`token.json` / `credentials.json`)."
-                    )
-                    return
-            except Exception as e:
-                log.exception("Failed to process uploaded GDrive credential file: %s", e)
-                await status_msg.edit_text(f"Failed to process credential file: {e}")
-                return
-            finally:
-                if temp_path and Path(temp_path).exists():
-                    Path(temp_path).unlink(missing_ok=True)
+                        if data.get("type") == "service_account":
+                            sa_dir = user_auth_dir / "accounts"
+                            sa_dir.mkdir(parents=True, exist_ok=True)
+                            safe_name = Path(reply_msg.document.file_name or "service_account.json").name
+                            dest_file = sa_dir / safe_name
+                            dest_file.write_text(content, encoding="utf-8")
+                            os.chmod(dest_file, 0o600)
+                            await status_msg.edit_text(
+                                f"✓ Service Account JSON saved for user `{sender_id}` to `{dest_file.name}`.\n"
+                                f"You can now use `/gd2tg <link>` to download Google Drive links!"
+                            )
+                            return
+                        elif "token" in data or "refresh_token" in data:
+                            dest_file = user_auth_dir / "token.json"
+                            dest_file.write_text(content, encoding="utf-8")
+                            os.chmod(dest_file, 0o600)
+                            await status_msg.edit_text(
+                                f"✓ OAuth token saved for user `{sender_id}` (`token.json`).\n"
+                                f"You can now use `/gd2tg <link>` to download Google Drive links!"
+                            )
+                            return
+                        elif "installed" in data or "web" in data or "client_id" in data:
+                            dest_file = user_auth_dir / "credentials.json"
+                            dest_file.write_text(content, encoding="utf-8")
+                            os.chmod(dest_file, 0o600)
+                            await status_msg.edit_text(
+                                f"✓ OAuth client credentials saved for user `{sender_id}` (`credentials.json`)."
+                            )
+                            return
+                        else:
+                            await status_msg.edit_text(
+                                "Unrecognized JSON structure. Expected a Google Cloud Service Account JSON key "
+                                "or OAuth token (`token.json` / `credentials.json`)."
+                            )
+                            return
+                    except Exception as e:
+                        log.exception("Failed to process uploaded GDrive credential file: %s", e)
+                        await status_msg.edit_text(f"Failed to process credential file: {e}")
+                        return
+                    finally:
+                        if temp_path and Path(temp_path).exists():
+                            Path(temp_path).unlink(missing_ok=True)
 
-        # Case 2: Standard URL command
-        parts = (message.text or message.caption or "").split(maxsplit=1)
-        if len(parts) < 2:
-            await message.reply_text("Provide a Google Drive link: `/gd2tg <gdrive_link>` or reply to a JSON credential file.")
+                # Case 2: Replying to a .txt file containing Google Drive links
+                elif fname.endswith(".txt") or mime.startswith("text/"):
+                    temp_path = await reply_msg.download()
+                    if temp_path and Path(temp_path).exists():
+                        try:
+                            content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                            for line in content.splitlines():
+                                line = line.strip()
+                                if line.startswith(("http://", "https://", "gdrive:", "gd2tg:")) or any(d in line.lower() for d in ("drive.google.com", "docs.google.com")):
+                                    if not line.startswith(("http://", "https://", "gdrive:", "gd2tg:")):
+                                        line = f"https://{line}"
+                                    urls.append(line)
+                        except Exception as e:
+                            log.warning("Failed reading replied txt file for gd2tg_cmd: %s", e)
+                        finally:
+                            Path(temp_path).unlink(missing_ok=True)
+
+            # Case 3: Replying to a text message or caption
+            reply_text = reply_msg.text or reply_msg.caption
+            if reply_text and not urls:
+                for token in reply_text.split():
+                    token = token.strip()
+                    if token.startswith(("http://", "https://", "gdrive:", "gd2tg:")) or any(d in token.lower() for d in ("drive.google.com", "docs.google.com")):
+                        if not token.startswith(("http://", "https://", "gdrive:", "gd2tg:")):
+                            token = f"https://{token}"
+                        urls.append(token)
+
+        if not urls:
+            urls = parsed_urls
+
+        # If not parsed as standard URLs, check if any token is a bare ID or path
+        if not urls and len(text_tokens) > 1:
+            for t in text_tokens[1:]:
+                t_clean = t.strip()
+                if not t_clean.startswith("-"):
+                    urls.append(t_clean)
+
+        if not urls:
+            await message.reply_text(
+                "Provide a Google Drive link or reply to a text/message containing links:\n"
+                "• `/gd2tg [-m|-mirror] [-tg] [-uz] [-p password] <gdrive_link>` (or `/gdrive`, `/gd`)\n"
+                "• Reply with `/gd2tg [-m] [-tg] [-uz]` to a text message or `.txt` file containing links\n"
+                "• Reply to a `.json` Service Account or OAuth credentials file to configure authentication."
+            )
             return
 
-        raw_link = parts[1].strip()
-        link = f"gd2tg:{raw_link}"
-        await _create_and_enqueue_job(client, message.chat.id, link, message, raw_link, user_id=sender_id)
+        urls_json = json.dumps([f"gdrive:{u}" for u in urls]) if len(urls) > 1 else f"gdrive:{urls[0]}"
+        prefix_parts = []
+        if is_mirror:
+            prefix_parts.append("mirror")
+        if unzip:
+            prefix_parts.append("unzip")
+        prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
+        prefix = f"gdrive{prefix_str}:"
+        display_text = f"{prefix} `{urls[0]}`" if len(urls) == 1 else f"{prefix} `{urls[0]}` (+ {len(urls) - 1} more)"
+
+        await _create_and_enqueue_job(
+            client,
+            message.chat.id,
+            urls_json,
+            message,
+            display_text,
+            is_mirror=is_mirror,
+            upload_tg=upload_tg,
+            unzip=unzip,
+            password=password,
+            user_id=sender_id,
+        )

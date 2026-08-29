@@ -744,8 +744,22 @@ class QueueManager:
                         job_state.trigger_event.set()
 
                     raw_url = job.url
-                    for pfx in ("gofile:", "gf:", "gf2tg:", "gfdl:"):
-                        raw_url = raw_url.removeprefix(pfx)
+                    if raw_url.startswith("[") and raw_url.endswith("]"):
+                        try:
+                            parsed_raw = json.loads(raw_url)
+                            if isinstance(parsed_raw, list):
+                                cleaned_list = []
+                                for it in parsed_raw:
+                                    s = str(it).strip()
+                                    for pfx in ("gofile:", "gf:", "gf2tg:", "gfdl:"):
+                                        s = s.removeprefix(pfx)
+                                    cleaned_list.append(s)
+                                raw_url = json.dumps(cleaned_list) if len(cleaned_list) > 1 else (cleaned_list[0] if cleaned_list else raw_url)
+                        except Exception:
+                            pass
+                    else:
+                        for pfx in ("gofile:", "gf:", "gf2tg:", "gfdl:"):
+                            raw_url = raw_url.removeprefix(pfx)
 
                     result = await run_with_progress(
                         raw_url,
