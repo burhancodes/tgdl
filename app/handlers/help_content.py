@@ -95,10 +95,12 @@ def get_help_content(page: str = "main") -> tuple[str, InlineKeyboardMarkup]:
     elif page == "cloud":
         text = (
             "**Topic: Cloud Storage & Upload Keys**\n\n"
-            "**Google Drive:**\n"
+            "**Google Drive & GoFile Downloads:**\n"
             "• `/gd2tg <gdrive_link>`\n"
             "> _Download Google Drive files or folders directly to Telegram._\n"
             "> _Supports per-user Service Accounts (`auth/<user_id>/accounts/*.json`) and OAuth tokens (`token.json`)._\n\n"
+            "• `/gofile <gofile_link>` or `/gfdl <gofile_link>`\n"
+            "> _Download GoFile links using high-speed bypass proxy._\n\n"
             "**External Cloud Uploaders & Per-User Keys:**\n"
             "• `/pdup` (Reply to media)\n"
             "> _Upload Telegram media file directly to Pixeldrain._\n\n"

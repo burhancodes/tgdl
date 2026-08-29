@@ -802,47 +802,82 @@ def register_download_handlers(app: Client) -> None:
             if local_path.exists():
                 local_path.unlink(missing_ok=True)
 
-    @app.on_message(filters.command(["gfup", "gofile"]) & authorized_filter)
-    async def gfup_cmd(_, message: Message) -> None:
-        if not message.reply_to_message:
-            await message.reply_text("Please reply to a media message with `/gfup` or `/gofile` to upload it to GoFile.")
+    @app.on_message(filters.command(["gfup", "gofile", "gfdl", "gf2tg"]) & authorized_filter)
+    async def gfup_cmd(client: Client, message: Message) -> None:
+        # If replying to media, perform upload
+        if message.reply_to_message:
+            reply_msg = message.reply_to_message
+            if reply_msg.document or reply_msg.video or reply_msg.photo or reply_msg.audio or reply_msg.voice:
+                status_msg = await message.reply_text("Downloading media file for GoFile upload...")
+                temp_dir = settings.data_dir / "temp_gfup"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+
+                file_path_str = await reply_msg.download(file_name=str(temp_dir) + "/")
+                if not file_path_str or not Path(file_path_str).exists():
+                    await status_msg.edit_text("Failed to download media file from Telegram.")
+                    return
+
+                local_path = Path(file_path_str)
+                try:
+                    await status_msg.edit_text(f"Uploading `{local_path.name}` to GoFile...")
+                    sender_id = message.from_user.id if message.from_user else None
+                    res, _ = await upload_to_gofile(local_path, user_id=sender_id)
+
+                    if isinstance(res, dict) and res.get("status") == "ok":
+                        gf_url = res.get("data", {}).get("downloadPage")
+                        await status_msg.edit_text(
+                            f"**[GoFile Upload Complete]({gf_url})**\n"
+                            f"**File**: `{local_path.name}`",
+                            link_preview_options=LinkPreviewOptions(is_disabled=True)
+                        )
+                    else:
+                        err = res.get("error") if isinstance(res, dict) else "Unknown error"
+                        await status_msg.edit_text(f"Failed to upload to GoFile: {err}")
+                except Exception as e:
+                    log.exception("Error uploading file to GoFile")
+                    await status_msg.edit_text(f"GoFile upload failed: {e}")
+                finally:
+                    if local_path.exists():
+                        local_path.unlink(missing_ok=True)
+                return
+
+        # If a URL is provided, enqueue a download job
+        text_tokens = (message.text or "").split()
+        if len(text_tokens) > 1:
+            is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
+            target_url = parsed_urls[0] if parsed_urls else text_tokens[1]
+            sender_id = message.from_user.id if message.from_user else None
+
+            archive_fmt = None
+            mirror_pixeldrain = False
+            prefix_parts = []
+            if is_mirror:
+                prefix_parts.append("mirror")
+            if unzip:
+                prefix_parts.append("unzip")
+            prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
+            display_text = f"gofile{prefix_str}: {target_url}"
+
+            await _create_and_enqueue_job(
+                client,
+                message.chat.id,
+                f"gofile:{target_url}",
+                message,
+                display_text,
+                is_mirror=is_mirror,
+                upload_tg=upload_tg,
+                unzip=unzip,
+                password=password,
+                archive_format=archive_fmt,
+                mirror_pixeldrain=mirror_pixeldrain,
+                user_id=sender_id,
+            )
             return
 
-        reply_msg = message.reply_to_message
-        if not (reply_msg.document or reply_msg.video or reply_msg.photo or reply_msg.audio or reply_msg.voice):
-            await message.reply_text("Replied message does not contain a supported media file.")
-            return
-
-        status_msg = await message.reply_text("Downloading media file for GoFile upload...")
-        temp_dir = settings.data_dir / "temp_gfup"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-
-        file_path_str = await reply_msg.download(file_name=str(temp_dir) + "/")
-        if not file_path_str or not Path(file_path_str).exists():
-            await status_msg.edit_text("Failed to download media file from Telegram.")
-            return
-
-        local_path = Path(file_path_str)
-        try:
-            await status_msg.edit_text(f"Uploading `{local_path.name}` to GoFile...")
-            res, _ = await upload_to_gofile(local_path)
-
-            if isinstance(res, dict) and res.get("status") == "ok":
-                gf_url = res.get("data", {}).get("downloadPage")
-                await status_msg.edit_text(
-                    f"**[GoFile Upload Complete]({gf_url})**\n"
-                    f"**File**: `{local_path.name}`",
-                    link_preview_options=LinkPreviewOptions(is_disabled=True)
-                )
-            else:
-                err = res.get("error") if isinstance(res, dict) else "Unknown error"
-                await status_msg.edit_text(f"Failed to upload to GoFile: {err}")
-        except Exception as e:
-            log.exception("Error uploading file to GoFile")
-            await status_msg.edit_text(f"GoFile upload failed: {e}")
-        finally:
-            if local_path.exists():
-                local_path.unlink(missing_ok=True)
+        await message.reply_text(
+            "Please provide a GoFile link to download (e.g. `/gofile <url>` or `/gfdl <url>`), "
+            "or reply to a media message with `/gfup` to upload it to GoFile."
+        )
 
     @app.on_message(filters.command(["fdup", "fileditch"]) & authorized_filter)
     async def fdup_cmd(_, message: Message) -> None:

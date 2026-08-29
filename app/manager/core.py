@@ -300,7 +300,7 @@ class QueueManager:
                 except Exception as e:
                     log.debug("Failed parsing JSON array URL for job #%s: %s", job.id, e)
 
-            from ..downloader import is_direct_url, is_m3u8_url
+            from ..downloader import is_direct_url, is_gofile_url, is_m3u8_url
 
             is_torrent = (
                 cleaned_url.startswith("magnet:") or
@@ -320,6 +320,13 @@ class QueueManager:
                 "mega.nz" in cleaned_url or
                 "mega.co.nz" in cleaned_url or
                 "mega.io" in cleaned_url
+            )
+            is_gofile = (
+                cleaned_url.startswith("gofile:") or
+                cleaned_url.startswith("gf:") or
+                cleaned_url.startswith("gf2tg:") or
+                cleaned_url.startswith("gfdl:") or
+                is_gofile_url(cleaned_url)
             )
             is_patch = cleaned_url.startswith("patch:")
 
@@ -430,7 +437,7 @@ class QueueManager:
 
             is_aria = (args_dict.get("engine") == "aria2")
 
-            if not is_torrent and not is_unzip and not is_gdrive and not is_mega and not is_aria and not is_patch:
+            if not is_torrent and not is_unzip and not is_gdrive and not is_mega and not is_gofile and not is_aria and not is_patch:
                 async def monitor_download_speed():
                     last_download_size = 0
                     last_download_time = time.time()
@@ -702,6 +709,61 @@ class QueueManager:
                 downloader = MegaDownloader(user_id=job_user_id, progress_callback=on_mega_progress)
                 final_files = await downloader.download_link(job.url, dest_dir)
                 result = DownloadResult(ok=True, files=final_files)
+
+            elif is_gofile:
+                from ..downloader import (
+                    DownloadResult,
+                    GoFileDownloader,
+                    run_cyberdrop_dl,
+                    run_with_progress,
+                )
+
+                async def on_gofile_progress(current_bytes: int, total_bytes: int, filename: str, url: str | None = None) -> None:
+                    job_state.total_downloaded_bytes = current_bytes
+                    if total_bytes > 0:
+                        job_state.total_expected_bytes = total_bytes
+                        job_state.download_pct = min(100.0, (current_bytes / total_bytes) * 100.0)
+                    if filename:
+                        job_state.current_download_file = filename
+                    if url:
+                        job_state.current_download_url = url
+                    job_state.trigger_event.set()
+
+                downloader = GoFileDownloader(dest_dir=dest_dir, progress_cb=on_gofile_progress)
+                try:
+                    downloaded_files = await downloader.download(job.url)
+                    result = DownloadResult(ok=True, files=downloaded_files)
+                except Exception as gfe:
+                    log.warning("GoFile bypass downloader failed for %s: %s. Attempting fallback...", job.url, gfe)
+                    def on_dl_progress(count: int, filename: str | None = None, current_url: str | None = None) -> None:
+                        job_state.download_count = count
+                        if filename:
+                            job_state.current_download_file = filename
+                        if current_url:
+                            job_state.current_download_url = current_url
+                        job_state.trigger_event.set()
+
+                    raw_url = job.url
+                    for pfx in ("gofile:", "gf:", "gf2tg:", "gfdl:"):
+                        raw_url = raw_url.removeprefix(pfx)
+
+                    result = await run_with_progress(
+                        raw_url,
+                        dest_dir,
+                        on_progress=on_dl_progress,
+                        extra_args=extra_args_list if extra_args_list else None,
+                        register_proc=reg,
+                        user_id=job_user_id,
+                    )
+                    if not result.ok:
+                        result = await run_cyberdrop_dl(
+                            raw_url,
+                            dest_dir,
+                            on_progress=on_dl_progress,
+                            extra_args=extra_args_list if extra_args_list else None,
+                            register_proc=reg,
+                            user_id=job_user_id,
+                        )
 
             elif is_torrent:
                 def on_torrent_progress(

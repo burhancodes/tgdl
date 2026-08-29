@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from ..state import JobState
 
 from .messaging import format_size, make_progress_bar
+from ...downloader.gofile import is_gofile_url
 
 
 def make_marquee_bar(width: int = 10) -> str:
@@ -227,6 +228,25 @@ def compile_queued_status_text(job_id: str, url: str, args_display: str) -> str:
             f"> • **__Type__**: __`Mega.nz Download`__\n"
             f"> • **__Engine__**: __`Mega API`__\n"
             f"> • **__Link__**: __`{mega_disp}`__{args_display}"
+        )
+
+    is_gofile = (
+        cleaned_url.startswith("gofile:") or
+        cleaned_url.startswith("gf:") or
+        cleaned_url.startswith("gf2tg:") or
+        cleaned_url.startswith("gfdl:") or
+        is_gofile_url(cleaned_url)
+    )
+    if is_gofile:
+        gf_disp = cleaned_url
+        for pfx in ("gofile:", "gf:", "gf2tg:", "gfdl:"):
+            gf_disp = gf_disp.removeprefix(pfx)
+        gf_disp = gf_disp[:50] + "..." if len(gf_disp) > 50 else gf_disp
+        return (
+            f"**Task #{job_id} Queued**\n"
+            f"> • **__Type__**: __`GoFile Download`__\n"
+            f"> • **__Engine__**: __`GoFile Bypass`__\n"
+            f"> • **__Link__**: __`{gf_disp}`__{args_display}"
         )
 
 
@@ -454,6 +474,13 @@ def compile_job_status_text(job: Job, job_state: JobState) -> str:
         "mega.io" in cleaned_url
     )
 
+    is_gofile = (
+        cleaned_url.startswith("gofile:") or
+        cleaned_url.startswith("gf:") or
+        cleaned_url.startswith("gf2tg:") or
+        cleaned_url.startswith("gfdl:") or
+        is_gofile_url(cleaned_url)
+    )
 
     is_direct = (
         cleaned_url.startswith("direct:") or
@@ -493,9 +520,9 @@ def compile_job_status_text(job: Job, job_state: JobState) -> str:
     if not job_state.downloader_done.is_set():
         dl_speed_str = format_size(job_state.download_speed)
         dl_bytes_str = format_size(job_state.total_downloaded_bytes)
-        dl_tool = "Google Drive API" if is_gdrive else ("Mega API" if is_mega else ("aria2c" if is_torrent else ("Direct HTTP Downloader" if is_direct else ("Pyrogram Downloader" if cleaned_url.startswith("unzip:") else "gallery-dl"))))
+        dl_tool = "Google Drive API" if is_gdrive else ("Mega API" if is_mega else ("GoFile Bypass" if is_gofile else ("aria2c" if is_torrent else ("Direct HTTP Downloader" if is_direct else ("Pyrogram Downloader" if cleaned_url.startswith("unzip:") else "gallery-dl")))))
 
-        if is_gdrive or is_mega:
+        if is_gdrive or is_mega or is_gofile:
             marquee = make_marquee_bar()
             lines.append(
                 f"**Downloader Metrics**\n"
