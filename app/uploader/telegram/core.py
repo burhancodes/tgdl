@@ -401,8 +401,8 @@ async def upload_file(
     lprefix: str = "",
     as_doc: bool = False,
     media_group: bool = True,
-) -> None:
-    """Uploads a file or directory using the stateful TelegramUploader module."""
+) -> bool:
+    """Uploads a file or directory using the stateful TelegramUploader module. Returns whether as_doc mode was enabled."""
     uploader = TelegramUploader(
         client=client,
         chat_id=chat_id,
@@ -413,3 +413,4 @@ async def upload_file(
         media_group=media_group,
     )
     await uploader.upload()
+    return uploader.as_doc

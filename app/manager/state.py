@@ -44,3 +44,4 @@ class JobState:
         self.pixeldrain_links: list[tuple[str, str]] = []
         self.is_pinned: bool = False
         self.split_parts_created: set[str] = set()
+        self.as_doc: bool = False

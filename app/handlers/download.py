@@ -848,8 +848,6 @@ def register_download_handlers(app: Client) -> None:
             target_url = parsed_urls[0] if parsed_urls else text_tokens[1]
             sender_id = message.from_user.id if message.from_user else None
 
-            archive_fmt = None
-            mirror_pixeldrain = False
             prefix_parts = []
             if is_mirror:
                 prefix_parts.append("mirror")
@@ -868,8 +866,6 @@ def register_download_handlers(app: Client) -> None:
                 upload_tg=upload_tg,
                 unzip=unzip,
                 password=password,
-                archive_format=archive_fmt,
-                mirror_pixeldrain=mirror_pixeldrain,
                 user_id=sender_id,
             )
             return

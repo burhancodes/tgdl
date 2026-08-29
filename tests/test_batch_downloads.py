@@ -291,3 +291,58 @@ async def test_converted_video_passed_to_handle_large_file_and_uploaded(tmp_path
     assert not large_mov.exists()
 
 
+@pytest.mark.asyncio
+async def test_photo_save_file_invalid_enables_as_doc_for_batch(tmp_path: Path):
+    """Verify that if a photo upload triggers PHOTO_SAVE_FILE_INVALID, as_doc mode is remembered on job_state for remaining files in batch."""
+    from pyrogram.errors import BadRequest
+    from app.uploader.telegram.core import TelegramUploader
+
+    client = MagicMock()
+    # Mock send_photo to fail with PHOTO_SAVE_FILE_INVALID on first call
+    client.send_photo = AsyncMock(
+        side_effect=BadRequest('Telegram says: [400 PHOTO_SAVE_FILE_INVALID] - The photo you tried to send cannot be saved by Telegram.')
+    )
+    client.send_document = AsyncMock(return_value=MagicMock())
+
+    import PIL.Image
+    img1 = tmp_path / "1 (10).jpg"
+    img2 = tmp_path / "1 (11).jpg"
+    img_data = PIL.Image.new("RGB", (100, 100), color="blue")
+    img_data.save(img1, "JPEG")
+    img_data.save(img2, "JPEG")
+
+    manager = QueueManager()
+    manager.client = client
+    mock_store = AsyncMock()
+    manager.store = mock_store
+
+    job = Job(
+        id="job_photo_test",
+        chat_id=123,
+        status_message_id=None,
+        url="test_url",
+        status=JobStatus.DOWNLOADING,
+        total_files=2,
+        sent_files=0,
+        skipped_files=0,
+        error=None,
+        created_at=0,
+        updated_at=0,
+    )
+    job_state = JobState(job, tmp_path)
+    job_state.downloader_done.set()
+    mock_store.get_job.return_value = job
+
+    with patch("app.manager.core.safe_send", new_callable=AsyncMock), \
+         patch("app.manager.core.safe_delete", new_callable=AsyncMock):
+        await manager._process_upload(job_state)
+
+    # job_state.as_doc should now be True
+    assert job_state.as_doc is True
+    # send_photo should only have been called ONCE (for img1). img2 should have been sent as document directly!
+    assert client.send_photo.call_count == 1
+    # send_document should have been called TWICE (once as retry for img1, once directly for img2)
+    assert client.send_document.call_count == 2
+
+
+

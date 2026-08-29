@@ -1934,7 +1934,11 @@ class QueueManager:
                             last_upload_speed_time = now
 
                     job_state.current_upload_file = f.name
-                    await upload_file(self.client, chat_id, f, progress=progress_cb)
+                    was_doc = await upload_file(
+                        self.client, chat_id, f, progress=progress_cb, as_doc=job_state.as_doc
+                    )
+                    if was_doc:
+                        job_state.as_doc = True
                     await self.store.mark_uploaded(job.id, f_rel)
 
                     job_state.uploaded_filenames.add(f_rel)
