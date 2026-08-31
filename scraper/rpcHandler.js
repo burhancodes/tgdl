@@ -1,6 +1,7 @@
 import { scrapeAll, listProviders } from './providers/index.js';
 import { buildMagnetUrl } from './lib/magnetHelper.js';
 import { logger } from './lib/logger.js';
+import { scrapeXenForo, resolveSingleMedia } from './xenforo/index.js';
 
 function makeError(id, code, message, data) {
   return {
@@ -110,6 +111,54 @@ async function handleSingleRpc(req, reqObj) {
 
       case 'torrent.health': {
         return makeResult(id, { status: 'ok', service: 'magnetio-scraper', version: '1.1.5' });
+      }
+
+      case 'xenforo.scrape':
+      case 'forum.scrape': {
+        const url = paramsObj.url || (Array.isArray(params) ? params[0] : null);
+        if (!url || typeof url !== 'string') {
+          return makeError(id, -32602, 'Invalid params: url string is required');
+        }
+
+        const userId = paramsObj.user_id || paramsObj.userId || null;
+        const cookiesTxt = paramsObj.cookies || paramsObj.cookiesTxt || null;
+        const passwords = Array.isArray(paramsObj.passwords) ? paramsObj.passwords : [];
+        const maxPages = paramsObj.maxPages ? parseInt(paramsObj.maxPages, 10) : 1;
+        const enabledHosts = Array.isArray(paramsObj.enabledHosts) ? paramsObj.enabledHosts : null;
+        const concurrency = paramsObj.concurrency ? parseInt(paramsObj.concurrency, 10) : 8;
+
+        const result = await scrapeXenForo({
+          url,
+          userId,
+          cookiesTxt,
+          passwords,
+          maxPages,
+          enabledHosts,
+          concurrency,
+        });
+
+        return makeResult(id, result);
+      }
+
+      case 'xenforo.resolve':
+      case 'forum.resolve': {
+        const url = paramsObj.url || (Array.isArray(params) ? params[0] : null);
+        if (!url || typeof url !== 'string') {
+          return makeError(id, -32602, 'Invalid params: url string is required');
+        }
+
+        const userId = paramsObj.user_id || paramsObj.userId || null;
+        const cookiesTxt = paramsObj.cookies || paramsObj.cookiesTxt || null;
+        const passwords = Array.isArray(paramsObj.passwords) ? paramsObj.passwords : [];
+
+        const items = await resolveSingleMedia({
+          url,
+          userId,
+          cookiesTxt,
+          passwords,
+        });
+
+        return makeResult(id, { url, items, count: items.length });
       }
 
       default:

@@ -8,6 +8,7 @@ import { startCronJobs } from './lib/cron.js';
 import { runPrewarm, getPrewarmStatus } from './lib/prewarm.js';
 import { logger } from './lib/logger.js';
 import { rpcMiddleware } from './rpcHandler.js';
+import { scrapeXenForo } from './xenforo/index.js';
 
 const app  = express();
 const PORT = process.env.PORT || 8080;
@@ -32,6 +33,31 @@ app.get('/health', (_req, res) => {
 
 app.get('/providers', (_req, res) => {
   res.json({ providers: listProviders() });
+});
+
+// ─── XenForo Forum Scraper ───────────────────────────────────────────────────
+
+app.post(['/xenforo/scrape', '/forum/scrape'], async (req, res) => {
+  const { url, userId, user_id, cookies, cookiesTxt, passwords, maxPages, enabledHosts, concurrency } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ error: 'url parameter is required.' });
+  }
+
+  try {
+    const result = await scrapeXenForo({
+      url,
+      userId: userId || user_id || null,
+      cookiesTxt: cookiesTxt || cookies || null,
+      passwords: Array.isArray(passwords) ? passwords : [],
+      maxPages: maxPages ? parseInt(maxPages, 10) : 1,
+      enabledHosts: Array.isArray(enabledHosts) ? enabledHosts : null,
+      concurrency: concurrency ? parseInt(concurrency, 10) : 8,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error(`XenForo scrape error [${url}]: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Streams endpoint ─────────────────────────────────────────────────────────

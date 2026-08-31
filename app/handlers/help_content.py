@@ -18,6 +18,8 @@ def get_help_content(page: str = "main") -> tuple[str, InlineKeyboardMarkup]:
             "> _Download media albums, posts, and videos from 100+ sites via gallery-dl engine._\n\n"
             "• `/cdl [flags] <url>` or `/cyberdropdl [flags] <url>`\n"
             "> _Bulk download files & albums from cyberdrop-dl supported file hosts & image boards._\n\n"
+            "• `/xfdl <url>` or `/xenforo <url>` or `/forum <url>`\n"
+            "> _Download XenForo forum threads, posts, attachments, and embedded host links with cookies.txt support._\n\n"
             "• `/mega [flags] <mega_url>` or `/meganz [flags] <mega_url>`\n"
             "> _Download files and folders recursively from mega.nz with real-time speed & file metrics._\n\n"
             "• `/mega -login <email:password>` or `/mega -logout` or `/mega -account`\n"

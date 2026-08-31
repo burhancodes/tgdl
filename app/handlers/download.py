@@ -53,8 +53,8 @@ def _parse_flags(text_tokens: list[str]) -> tuple[bool, bool, bool, str | None, 
                 i += 1
         elif any(low.startswith(prefix) for prefix in ("-p=", "-pass=", "--pass=", "--password=")):
             password = token.split("=", 1)[1].strip() or None
-        elif token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:")) or any(token.lower().startswith(d) for d in ("drive.google.com", "docs.google.com", "mega.nz", "mega.co.nz", "mega.io", "gofile.io", "gofile.co")):
-            if not token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:")):
+        elif token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:", "xenforo:", "simpcity:", "forum:", "fpd:", "cdl:", "cyberdrop-dl:")) or any(token.lower().startswith(d) for d in ("drive.google.com", "docs.google.com", "mega.nz", "mega.co.nz", "mega.io", "gofile.io", "gofile.co")):
+            if not token.startswith(("http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:", "xenforo:", "simpcity:", "forum:", "fpd:", "cdl:", "cyberdrop-dl:")):
                 token = f"https://{token}"
             urls.append(token)
         i += 1
@@ -466,6 +466,65 @@ def register_download_handlers(app: Client) -> None:
         await _create_and_enqueue_job(
             client, message.chat.id, urls_json, message, display_text,
             is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password, engine="cyberdrop-dl"
+        )
+
+    @app.on_message(filters.command(["xenforo", "forum", "xfdl"]) & authorized_filter)
+    async def xenforo_cmd(client: Client, message: Message) -> None:
+        text_tokens = message.text.split() if message.text else []
+        is_mirror, upload_tg, unzip, password, parsed_urls = _parse_flags(text_tokens)
+        urls = []
+
+        if message.reply_to_message:
+            reply_msg = message.reply_to_message
+
+            if reply_msg.document and (
+                reply_msg.document.file_name.endswith(".txt") or
+                (reply_msg.document.mime_type and reply_msg.document.mime_type.startswith("text/"))
+            ):
+                temp_path = await reply_msg.download()
+                if temp_path and Path(temp_path).exists():
+                    try:
+                        content = Path(temp_path).read_text(encoding="utf-8", errors="ignore")
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if line.startswith(("http://", "https://", "xenforo:", "simpcity:", "forum:", "fpd:")):
+                                urls.append(line)
+                    except Exception as e:
+                        log.warning("Failed reading replied txt file for xenforo_cmd: %s", e)
+                    finally:
+                        Path(temp_path).unlink(missing_ok=True)
+
+            reply_text = reply_msg.text or reply_msg.caption
+            if reply_text and not urls:
+                for token in reply_text.split():
+                    token = token.strip()
+                    if token.startswith(("http://", "https://", "xenforo:", "simpcity:", "forum:", "fpd:")):
+                        urls.append(token)
+
+        if not urls:
+            urls = parsed_urls
+
+        if not urls:
+            await message.reply_text(
+                "Provide a XenForo / SimpCity forum URL or reply to a text/message containing URLs:\n"
+                "• `/simpcity [-m|-mirror] [-tg] [-uz] [-p password] <forum_url>`\n"
+                "• `/forum <forum_url>` or `/xenforo <forum_url>`\n"
+                "• Reply with `/forum` to a text message or `.txt` file containing URLs."
+            )
+            return
+
+        urls_json = json.dumps([f"xenforo:{u}" for u in urls]) if len(urls) > 1 else f"xenforo:{urls[0]}"
+        prefix_parts = []
+        if is_mirror:
+            prefix_parts.append("mirror")
+        if unzip:
+            prefix_parts.append("unzip")
+        prefix_str = f" [{', '.join(prefix_parts)}]" if prefix_parts else ""
+        prefix = f"xenforo{prefix_str}:"
+        display_text = f"{prefix} `{urls[0]}`" if len(urls) == 1 else f"{prefix} `{urls[0]}` (+ {len(urls) - 1} more)"
+        await _create_and_enqueue_job(
+            client, message.chat.id, urls_json, message, display_text,
+            is_mirror=is_mirror, upload_tg=upload_tg, unzip=unzip, password=password, engine="xenforo"
         )
 
     @app.on_message(filters.command(["mega", "meganz"]) & authorized_filter)

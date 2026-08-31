@@ -300,7 +300,7 @@ class QueueManager:
                 except Exception as e:
                     log.debug("Failed parsing JSON array URL for job #%s: %s", job.id, e)
 
-            from ..downloader import is_direct_url, is_gofile_url, is_m3u8_url
+            from ..downloader import is_direct_url, is_gofile_url, is_m3u8_url, is_xenforo_url
 
             is_torrent = (
                 cleaned_url.startswith("magnet:") or
@@ -931,6 +931,51 @@ class QueueManager:
                                 register_proc=reg,
                                 user_id=job_user_id,
                             )
+
+            elif cleaned_url.startswith(("xenforo:", "simpcity:", "forum:", "fpd:")) or is_xenforo_url(cleaned_url) or args_dict.get("engine") == "xenforo":
+                target_u = cleaned_url
+                for pfx in ("xenforo:", "simpcity:", "forum:", "fpd:"):
+                    if target_u.startswith(pfx):
+                        target_u = target_u[len(pfx):]
+                        break
+
+                extra_args_list = []
+                if job.args:
+                    try:
+                        args_data = json.loads(job.args)
+                        if isinstance(args_data, dict):
+                            pwd = args_data.get("password")
+                            if pwd:
+                                extra_args_list.extend(["--password", str(pwd)])
+                            raw_extra = args_data.get("extra_args")
+                            if isinstance(raw_extra, list):
+                                extra_args_list.extend([str(x) for x in raw_extra])
+                        elif isinstance(args_data, list):
+                            extra_args_list = [str(x) for x in args_data]
+                    except Exception as e:
+                        log.warning("Failed to parse job.args for job #%s: %s", job.id, e)
+
+                from ..downloader import (
+                    DownloadResult,
+                    run_xenforo_dl,
+                )
+
+                def on_xf_progress(count: int, filename: str | None = None, current_url: str | None = None) -> None:
+                    job_state.download_count = count
+                    if filename:
+                        job_state.current_download_file = filename
+                    if current_url:
+                        job_state.current_download_url = current_url
+                    job_state.trigger_event.set()
+
+                result = await run_xenforo_dl(
+                    target_u,
+                    dest_dir,
+                    on_progress=on_xf_progress,
+                    extra_args=extra_args_list if extra_args_list else None,
+                    register_proc=reg,
+                    user_id=job_user_id,
+                )
 
             elif cleaned_url.startswith(("cdl:", "cyberdrop-dl:")) or args_dict.get("engine") == "cyberdrop-dl":
                 target_u = cleaned_url
