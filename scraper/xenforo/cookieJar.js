@@ -1,21 +1,86 @@
 import fs from 'fs';
 import path from 'path';
+import {
+  DEFAULT_FALLBACK_UA,
+  extractUserAgentFromCookies,
+  getDeviceHeaders,
+  parseUserAgent,
+  resolveUserAgent,
+} from './deviceProfile.js';
 
 /**
- * Netscape cookies.txt parser and CookieJar for managing user_id specific cookies.
+ * Netscape cookies.txt parser and CookieJar for managing user_id specific cookies
+ * and device fingerprint / spoofing headers.
  */
 export class CookieJar {
   constructor() {
     /** @type {Array<{domain: string, includeSubdomains: boolean, path: string, secure: boolean, expires: number, name: string, value: string}>} */
     this.cookies = [];
+    /** @type {string} */
+    this.userAgent = DEFAULT_FALLBACK_UA;
+  }
+
+  /**
+   * Set the spoofed device User-Agent.
+   * @param {string} ua
+   */
+  setUserAgent(ua) {
+    if (ua && typeof ua === 'string' && ua.trim().length > 10) {
+      this.userAgent = ua.trim();
+    }
+  }
+
+  /**
+   * Get current spoofed device User-Agent.
+   * @returns {string}
+   */
+  getUserAgent() {
+    return this.userAgent;
+  }
+
+  /**
+   * Returns parsed device profile for current User-Agent.
+   * @returns {object}
+   */
+  getDeviceProfile() {
+    return parseUserAgent(this.userAgent);
+  }
+
+  /**
+   * Generates exact matching HTTP headers based on the spoofed device and target URL.
+   * @param {string} [urlStr]
+   * @param {object} [opts]
+   * @param {string} [opts.destType='document']
+   * @param {string} [opts.referer]
+   * @param {Record<string, string>} [opts.extraHeaders]
+   * @returns {Record<string, string>}
+   */
+  getDeviceHeaders(urlStr = '', { destType = 'document', referer = '', extraHeaders = {} } = {}) {
+    const baseHeaders = getDeviceHeaders(this.userAgent, {
+      destType,
+      referer: referer || urlStr || '',
+    });
+    const cookieHeader = urlStr ? this.getCookieHeader(urlStr) : '';
+    return {
+      ...baseHeaders,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      ...extraHeaders,
+    };
   }
 
   /**
    * Parse Netscape cookies.txt formatted string.
+   * Automatically extracts and saves spoofed User-Agent if present in comment lines.
    * @param {string} content
    */
   parseNetscape(content) {
     if (!content || typeof content !== 'string') return;
+
+    // Extract User-Agent if present in comments
+    const extractedUa = extractUserAgentFromCookies(content);
+    if (extractedUa) {
+      this.setUserAgent(extractedUa);
+    }
 
     const lines = content.split(/\r?\n/);
     for (const line of lines) {
@@ -248,17 +313,24 @@ export function getCookiesPath(userId = null, baseDir = process.cwd()) {
 }
 
 /**
- * Creates and loads a CookieJar instance for a specific user_id or raw cookie string.
- * @param {{userId?: string|number, cookiesTxt?: string, baseDir?: string}} [opts]
+ * Creates and loads a CookieJar instance for a specific user_id or raw cookie string
+ * with automatic device fingerprint & User-Agent resolution.
+ * @param {{userId?: string|number, cookiesTxt?: string, userAgent?: string, baseDir?: string}} [opts]
  * @returns {CookieJar}
  */
-export function createCookieJar({ userId = null, cookiesTxt = null, baseDir = process.cwd() } = {}) {
+export function createCookieJar({ userId = null, cookiesTxt = null, userAgent = null, baseDir = process.cwd() } = {}) {
   const jar = new CookieJar();
 
+  // 1. Resolve effective User-Agent from explicit param, cookies, files, or fallback
+  const resolvedUa = resolveUserAgent({ userId, cookiesTxt, userAgent, baseDir });
+  jar.setUserAgent(resolvedUa);
+
+  // 2. Parse raw cookies text if provided
   if (cookiesTxt && typeof cookiesTxt === 'string') {
     jar.parseNetscape(cookiesTxt);
   }
 
+  // 3. Load cookies from disk if available
   if (userId || !cookiesTxt) {
     const filePath = getCookiesPath(userId, baseDir);
     if (filePath) {
@@ -269,6 +341,11 @@ export function createCookieJar({ userId = null, cookiesTxt = null, baseDir = pr
         // Log silently or ignore
       }
     }
+  }
+
+  // If explicit userAgent was passed, guarantee it overrides any comment UA
+  if (userAgent && typeof userAgent === 'string' && userAgent.trim().length > 10) {
+    jar.setUserAgent(userAgent.trim());
   }
 
   return jar;

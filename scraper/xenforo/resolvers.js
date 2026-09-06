@@ -1,11 +1,11 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { DEFAULT_FALLBACK_UA, getDeviceHeaders } from './deviceProfile.js';
 
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.173 Safari/537.36';
+const DEFAULT_USER_AGENT = DEFAULT_FALLBACK_UA;
 
 /**
- * Helper to make HTTP GET/POST with CookieJar and custom headers.
+ * Helper to make HTTP GET/POST with CookieJar and dynamic device spoofing headers.
  */
 export async function fetchWithCookies(url, {
   method = 'GET',
@@ -14,21 +14,20 @@ export async function fetchWithCookies(url, {
   cookieJar = null,
   timeout = 15000,
   responseType = 'text',
+  destType = 'document',
 } = {}) {
-  const cookieHeader = cookieJar ? cookieJar.getCookieHeader(url) : '';
-  const mergedHeaders = {
-    'User-Agent': DEFAULT_USER_AGENT,
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    Referer: url,
-    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-    ...headers,
-  };
+  const referer = headers.Referer || headers.referer || url;
+  const baseHeaders = cookieJar
+    ? cookieJar.getDeviceHeaders(url, { destType, referer, extraHeaders: headers })
+    : {
+        ...getDeviceHeaders(DEFAULT_USER_AGENT, { destType, referer }),
+        ...headers,
+      };
 
   const response = await axios({
     url,
     method,
-    headers: mergedHeaders,
+    headers: baseHeaders,
     data,
     timeout,
     responseType,
@@ -62,12 +61,15 @@ export async function resolveSimpcityAttachment(url, { cookieJar = null, origin 
   }
 
   // Attachments may have ?temp_hash query params, keep as is
-  const cookieHeader = cookieJar ? cookieJar.getCookieHeader(cleanUrl) : '';
+  const headers = cookieJar
+    ? cookieJar.getDeviceHeaders(cleanUrl, { destType: 'image', referer: origin })
+    : getDeviceHeaders(DEFAULT_USER_AGENT, { destType: 'image', referer: origin });
+
   return [{
     url: cleanUrl,
     name: null,
     folderName: null,
-    headers: cookieHeader ? { Cookie: cookieHeader } : {},
+    headers,
     host: 'Simpcity',
   }];
 }

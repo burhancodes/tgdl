@@ -15,8 +15,8 @@ export function isXenForoUrl(url) {
     return true;
   }
   return /simpcity\.(cr|is|cz|hk|rs|ax|su|st|top|to)\//i.test(u) ||
-         /\/threads\/[a-zA-Z0-9._-]+\.\d+/i.test(u) ||
-         /\/posts\/\d+/i.test(u);
+    /\/threads\/[a-zA-Z0-9._-]+\.\d+/i.test(u) ||
+    /\/posts\/\d+/i.test(u);
 }
 
 /**
@@ -26,6 +26,7 @@ export function isXenForoUrl(url) {
  * @param {string} opts.url - Target XenForo thread/post URL
  * @param {string|number|null} [opts.userId] - Optional user_id to load cookies from auth/{user_id}/cookies.txt
  * @param {string|null} [opts.cookiesTxt] - Raw Netscape cookies.txt content
+ * @param {string|null} [opts.userAgent] - Optional custom User-Agent override
  * @param {string[]} [opts.passwords] - Explicit password hints / spoilers
  * @param {number} [opts.maxPages=1] - Max number of thread pages to scrape (default 1)
  * @param {string[]|null} [opts.enabledHosts] - Whitelist of host names (null = all)
@@ -37,6 +38,7 @@ export async function scrapeXenForo({
   url,
   userId = null,
   cookiesTxt = null,
+  userAgent = null,
   passwords = [],
   maxPages = 1,
   enabledHosts = null,
@@ -58,8 +60,8 @@ export async function scrapeXenForo({
     cleanUrl = `https://${cleanUrl}`;
   }
 
-  // 1. Initialize CookieJar
-  const cookieJar = createCookieJar({ userId, cookiesTxt, baseDir });
+  // 1. Initialize CookieJar & Device Profile
+  const cookieJar = createCookieJar({ userId, cookiesTxt, userAgent, baseDir });
 
   // 2. Fetch initial thread page
   let currentPageUrl = cleanUrl;
@@ -124,25 +126,36 @@ export async function scrapeXenForo({
 
               for (const it of items) {
                 if (it && it.url) {
+                  // Ensure full spoofed device headers are attached
+                  const itemHeaders = cookieJar.getDeviceHeaders(it.url, {
+                    destType: 'image',
+                    referer: it.headers?.Referer || resUrl,
+                    extraHeaders: it.headers || {},
+                  });
+
                   resolvedItems.push({
                     host: it.host || hostGroup.name,
                     originalUrl: resUrl,
                     resolvedUrl: it.url,
                     filename: it.name || null,
                     folderName: it.folderName || postFolder,
-                    headers: it.headers || {},
+                    headers: itemHeaders,
                   });
                 }
               }
             } catch (err) {
               // Gracefully handle resolver errors per resource
+              const fallbackHeaders = cookieJar.getDeviceHeaders(resUrl, {
+                destType: 'image',
+                referer: resUrl,
+              });
               resolvedItems.push({
                 host: hostGroup.name,
                 originalUrl: resUrl,
                 resolvedUrl: resUrl,
                 filename: null,
                 folderName: postFolder,
-                headers: {},
+                headers: fallbackHeaders,
                 error: err.message,
               });
             }
@@ -169,6 +182,8 @@ export async function scrapeXenForo({
     pagesScraped: pagesFetched,
     totalPosts: processedPosts.length,
     totalResources,
+    userAgent: cookieJar.getUserAgent(),
+    deviceProfile: cookieJar.getDeviceProfile(),
     posts: processedPosts,
   };
 }
@@ -180,6 +195,7 @@ export async function scrapeXenForo({
  * @param {string} opts.url
  * @param {string|number|null} [opts.userId]
  * @param {string|null} [opts.cookiesTxt]
+ * @param {string|null} [opts.userAgent]
  * @param {string[]} [opts.passwords]
  * @param {string} [opts.baseDir]
  * @returns {Promise<Array<object>>}
@@ -188,10 +204,11 @@ export async function resolveSingleMedia({
   url,
   userId = null,
   cookiesTxt = null,
+  userAgent = null,
   passwords = [],
   baseDir = process.cwd(),
 } = {}) {
   if (!url) throw new Error('URL is required.');
-  const cookieJar = createCookieJar({ userId, cookiesTxt, baseDir });
+  const cookieJar = createCookieJar({ userId, cookiesTxt, userAgent, baseDir });
   return resolveResource(url, { passwords, cookieJar });
 }

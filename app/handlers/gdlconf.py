@@ -34,6 +34,12 @@ from ..downloader.gallery_dl.gofile_helper import (
     sync_gofile_salt,
     update_gdl_conf_gofile,
 )
+from ..downloader.xenforo import (
+    extract_user_agent_from_cookies,
+    get_user_agent_path,
+    parse_user_agent,
+    resolve_user_device_agent,
+)
 
 
 log = logging.getLogger(__name__)
@@ -191,6 +197,11 @@ def build_gdlconf_text(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             gofile_salt = gofile_conf.get("salt")
     gofile_salt = gofile_salt or os.environ.get("GOFILE_WT_SALT") or DEFAULT_FALLBACK_SALT
 
+    user_device_ua = resolve_user_device_agent(user_id)
+    device_prof = parse_user_agent(user_device_ua)
+    has_custom_ua = (settings.auth_dir / str(user_id) / "user-agent.txt").exists()
+    ua_src = "Custom `user-agent.txt`" if has_custom_ua else "Extracted / Default"
+
     text = (
         "**gallery-dl Configuration & Cookies Status**\n\n"
         f"• **Config Scope**: {scope_str}\n"
@@ -198,11 +209,14 @@ def build_gdlconf_text(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         f"• **Config Size**: `{size_str}`\n"
         f"• **Last Modified**: `{mtime_str}`\n"
         f"• **GoFile Salt**: `{gofile_salt}`\n"
+        f"• **Device Spoofing**: `{device_prof['brand']} on {device_prof['platform']}` ({ua_src})\n"
         f"• **Configured Sites**: {ext_summary}\n"
         f"• **Cookies File**: {cookies_str}\n\n"
         "**Usage Commands:**\n"
         "• Reply to a `.conf` / `.json` file with `/gdlconf` to upload custom config.\n"
-        "• Reply to a `cookies.txt` file with `/gdlconf` to upload custom cookies.\n"
+        "• Reply to a `cookies.txt` file with `/gdlconf` to upload custom cookies (auto-detects device UA).\n"
+        "• Reply to a `user-agent.txt` file with `/gdlconf` to upload custom device UA.\n"
+        "• `/gdlconf ua <user-agent>` — Set or inspect spoofed device User-Agent.\n"
         "• `/gdlconf get` — Download current configuration file.\n"
         "• `/gdlconf cookies get` — Download current `cookies.txt` file.\n"
         "• `/gdlconf gofile` — Check GoFile salt and token status.\n"
@@ -294,10 +308,50 @@ def register_gdlconf_handlers(app: Client) -> None:
                     user_cookies_path.write_text(content, encoding="utf-8")
                     os.chmod(user_cookies_path, 0o600)
 
+                    # Extract and save User-Agent from cookies comments if present
+                    detected_ua = extract_user_agent_from_cookies(content)
+                    ua_msg = ""
+                    if detected_ua:
+                        ua_file = user_cookies_path.parent / "user-agent.txt"
+                        ua_file.write_text(detected_ua, encoding="utf-8")
+                        os.chmod(ua_file, 0o600)
+                        profile = parse_user_agent(detected_ua)
+                        ua_msg = (
+                            f"\n• **Detected Device**: `{profile['brand']} on {profile['platform']}`\n"
+                            f"• **Spoofed User-Agent**: `{detected_ua}`"
+                        )
+
                     await status_msg.edit_text(
                         f"**Saved user cookies file!**\n"
-                        f"Saved to: `auth/{user_id}/cookies.txt`\n\n"
-                        f"All subsequent `/gdl` downloads will automatically use your custom cookies."
+                        f"Saved to: `auth/{user_id}/cookies.txt`{ua_msg}\n\n"
+                        f"All subsequent `/gdl`, `/forum`, and `/simpcity` downloads will strictly spoof this device and use your cookies."
+                    )
+                    return
+
+                # Detect if file is user-agent.txt or custom device UA
+                is_ua_file = (
+                    file_name in ("user-agent.txt", "ua.txt")
+                    or file_name.endswith(".ua")
+                    or subcommand in ("ua", "useragent", "user-agent")
+                )
+                if is_ua_file:
+                    clean_ua = content.strip()
+                    if not clean_ua or len(clean_ua) < 10:
+                        await status_msg.edit_text("Uploaded User-Agent string is too short or invalid.")
+                        return
+
+                    user_ua_path = settings.auth_dir / str(user_id) / "user-agent.txt"
+                    user_ua_path.parent.mkdir(parents=True, exist_ok=True)
+                    user_ua_path.write_text(clean_ua, encoding="utf-8")
+                    os.chmod(user_ua_path, 0o600)
+                    profile = parse_user_agent(clean_ua)
+
+                    await status_msg.edit_text(
+                        f"**Saved user device User-Agent!**\n"
+                        f"Saved to: `auth/{user_id}/user-agent.txt`\n"
+                        f"• **Device**: `{profile['brand']} on {profile['platform']}`\n"
+                        f"• **User-Agent**: `{clean_ua}`\n\n"
+                        f"All subsequent forum, media, and downloader requests will strictly spoof this device."
                     )
                     return
 
@@ -344,6 +398,47 @@ def register_gdlconf_handlers(app: Client) -> None:
                 await message.reply_text("Custom user `cookies.txt` deleted!")
             else:
                 await message.reply_text("You do not have a custom `cookies.txt` saved.")
+            return
+
+        # Case 3: Subcommands for User-Agent device spoofing
+        elif subcommand.startswith(("ua", "useragent", "user-agent")):
+            parts = subcommand.split(maxsplit=1)
+            ua_action = parts[1].strip() if len(parts) > 1 else ""
+            user_ua_path = settings.auth_dir / str(user_id) / "user-agent.txt"
+
+            if ua_action in ("get", "status", "show", ""):
+                curr_ua = resolve_user_device_agent(user_id)
+                profile = parse_user_agent(curr_ua)
+                has_custom = user_ua_path.exists() and user_ua_path.is_file()
+                src = "Custom `user-agent.txt`" if has_custom else "Extracted / Default"
+                await message.reply_text(
+                    f"**Device User-Agent Fingerprint**\n\n"
+                    f"• **Source**: {src}\n"
+                    f"• **Device Profile**: `{profile['brand']} on {profile['platform']}`\n"
+                    f"• **User-Agent**: `{curr_ua}`\n\n"
+                    f"To update: `/gdlconf ua <new_user_agent>` or upload `user-agent.txt` / `cookies.txt`."
+                )
+            elif ua_action in ("delete", "remove", "reset"):
+                if user_ua_path.exists():
+                    user_ua_path.unlink(missing_ok=True)
+                    await message.reply_text("Custom user `user-agent.txt` deleted! Reset to cookie/default.")
+                else:
+                    await message.reply_text("You do not have a custom `user-agent.txt` saved.")
+            else:
+                new_ua = ua_action.strip()
+                if len(new_ua) < 10:
+                    await message.reply_text("User-Agent string is too short or invalid.")
+                    return
+                user_ua_path.parent.mkdir(parents=True, exist_ok=True)
+                user_ua_path.write_text(new_ua, encoding="utf-8")
+                os.chmod(user_ua_path, 0o600)
+                profile = parse_user_agent(new_ua)
+                await message.reply_text(
+                    f"**Saved user device User-Agent!**\n"
+                    f"• **Device**: `{profile['brand']} on {profile['platform']}`\n"
+                    f"• **User-Agent**: `{new_ua}`\n\n"
+                    f"All subsequent downloads will spoof this device."
+                )
             return
 
         # Case 3: Subcommands for GoFile Salt Sync

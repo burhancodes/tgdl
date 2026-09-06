@@ -122,6 +122,7 @@ async function handleSingleRpc(req, reqObj) {
 
         const userId = paramsObj.user_id || paramsObj.userId || null;
         const cookiesTxt = paramsObj.cookies || paramsObj.cookiesTxt || null;
+        const userAgent = paramsObj.userAgent || paramsObj.user_agent || null;
         const passwords = Array.isArray(paramsObj.passwords) ? paramsObj.passwords : [];
         const maxPages = paramsObj.maxPages ? parseInt(paramsObj.maxPages, 10) : 1;
         const enabledHosts = Array.isArray(paramsObj.enabledHosts) ? paramsObj.enabledHosts : null;
@@ -131,6 +132,7 @@ async function handleSingleRpc(req, reqObj) {
           url,
           userId,
           cookiesTxt,
+          userAgent,
           passwords,
           maxPages,
           enabledHosts,
@@ -149,12 +151,14 @@ async function handleSingleRpc(req, reqObj) {
 
         const userId = paramsObj.user_id || paramsObj.userId || null;
         const cookiesTxt = paramsObj.cookies || paramsObj.cookiesTxt || null;
+        const userAgent = paramsObj.userAgent || paramsObj.user_agent || null;
         const passwords = Array.isArray(paramsObj.passwords) ? paramsObj.passwords : [];
 
         const items = await resolveSingleMedia({
           url,
           userId,
           cookiesTxt,
+          userAgent,
           passwords,
         });
 

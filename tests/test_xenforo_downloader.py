@@ -49,14 +49,81 @@ def test_cookie_paths(tmp_path: Path):
         # When no file exists
         assert get_cookies_path(123456) is None
 
-        # Create user cookies file
+        # Create user cookies file with User-Agent comment
         user_cookies.parent.mkdir(parents=True, exist_ok=True)
-        user_cookies.write_text("# Netscape cookies\nsimpcity.su\tTRUE\t/\tTRUE\t0\txf_user\tuser_token\n")
+        user_cookies.write_text(
+            "# Netscape cookies\n"
+            "# User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36\n"
+            "simpcity.su\tTRUE\t/\tTRUE\t0\txf_user\tuser_token\n"
+        )
 
         assert get_cookies_path(123456) == user_cookies
         content = load_user_cookies_text(123456)
         assert content is not None
         assert "xf_user" in content
+
+
+def test_device_profile_and_hints():
+    from app.downloader.xenforo.device_profile import (
+        extract_user_agent_from_cookies,
+        get_device_headers,
+        parse_user_agent,
+        resolve_user_device_agent,
+    )
+
+    # 1. Test extraction from cookie comments
+    cookie_str = (
+        "# Netscape HTTP Cookie File\n"
+        "# User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15\n"
+        "domain.com\tTRUE\t/\tTRUE\t0\tkey\tval\n"
+    )
+    extracted = extract_user_agent_from_cookies(cookie_str)
+    assert extracted == "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15"
+
+    # 2. Test Chrome on Windows parsing and hints
+    chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    prof_chrome = parse_user_agent(chrome_ua)
+    assert prof_chrome["brand"] == "Google Chrome"
+    assert prof_chrome["platform"] == "Windows"
+    assert prof_chrome["is_mobile"] is False
+
+    headers_chrome = get_device_headers(chrome_ua, dest_type="document")
+    assert "Google Chrome" in headers_chrome["sec-ch-ua"]
+    assert headers_chrome["sec-ch-ua-platform"] == '"Windows"'
+    assert headers_chrome["sec-ch-ua-mobile"] == "?0"
+    assert headers_chrome["Sec-Fetch-Dest"] == "document"
+
+    # 3. Test Safari on macOS (must omit Sec-CH-UA)
+    safari_ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15"
+    prof_safari = parse_user_agent(safari_ua)
+    assert prof_safari["brand"] == "Safari"
+    assert prof_safari["platform"] == "macOS"
+
+    headers_safari = get_device_headers(safari_ua, dest_type="image")
+    assert "sec-ch-ua" not in headers_safari
+    assert "sec-ch-ua-platform" not in headers_safari
+    assert headers_safari["Sec-Fetch-Dest"] == "image"
+    assert headers_safari["User-Agent"] == safari_ua
+
+    # 4. Test Firefox on Linux (must omit Sec-CH-UA)
+    ff_ua = "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0"
+    prof_ff = parse_user_agent(ff_ua)
+    assert prof_ff["brand"] == "Firefox"
+    assert prof_ff["platform"] == "Linux"
+
+    headers_ff = get_device_headers(ff_ua)
+    assert "sec-ch-ua" not in headers_ff
+    assert headers_ff["User-Agent"] == ff_ua
+
+    # 5. Test Android Chrome
+    android_ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.122 Mobile Safari/537.36"
+    prof_android = parse_user_agent(android_ua)
+    assert prof_android["platform"] == "Android"
+    assert prof_android["is_mobile"] is True
+
+    headers_android = get_device_headers(android_ua)
+    assert headers_android["sec-ch-ua-platform"] == '"Android"'
+    assert headers_android["sec-ch-ua-mobile"] == "?1"
 
 
 @pytest.mark.asyncio

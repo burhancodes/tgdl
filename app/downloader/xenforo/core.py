@@ -20,6 +20,14 @@ from ...utils.sorting import natural_path_sort_key
 from ..aria2c.torrent.magnetio_client import _rpc_call
 from ..aria2c.torrent.magnetio_daemon import start_magnetio_daemon
 from ..direct.core import get_aiohttp_connector, get_filename_from_url, is_url_private_ip
+from .device_profile import (
+    DEFAULT_FALLBACK_UA,
+    extract_user_agent_from_cookies,
+    get_device_headers,
+    get_user_agent_path,
+    parse_user_agent,
+    resolve_user_device_agent,
+)
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +109,8 @@ def is_simpcity_url(url: str) -> bool:
 class XenForoDownloader:
     """
     Downloader for XenForo forum threads and posts (SimpCity and others)
-    powered by the Node.js scraper sidecar with user_id managed cookies.txt support.
+    powered by the Node.js scraper sidecar with user_id managed cookies.txt and
+    strict device/browser spoofing support.
     """
 
     def __init__(
@@ -112,6 +121,7 @@ class XenForoDownloader:
         on_byte_progress: Callable[[int, int, str], Coroutine[None, None, None]] | None = None,
         passwords: list[str] | None = None,
         max_pages: int = 1,
+        user_agent: str | None = None,
     ) -> None:
         self.dest_dir = Path(dest_dir)
         self.user_id = user_id
@@ -119,6 +129,12 @@ class XenForoDownloader:
         self.on_byte_progress = on_byte_progress
         self.passwords = passwords or []
         self.max_pages = max_pages
+        self.user_agent = user_agent
+        self.effective_ua = resolve_user_device_agent(
+            user_id=user_id,
+            cookies_text=load_user_cookies_text(user_id),
+            custom_ua=user_agent,
+        )
 
         self.downloaded_files: list[Path] = []
         self.total_downloaded_bytes = 0
@@ -128,7 +144,7 @@ class XenForoDownloader:
         self.is_cancelled = True
 
     async def scrape(self, url: str) -> dict[str, Any]:
-        """Calls the scraper sidecar via JSON-RPC xenforo.scrape."""
+        """Calls the scraper sidecar via JSON-RPC xenforo.scrape with strict device spoofing."""
         # Ensure scraper daemon is running
         try:
             await start_magnetio_daemon()
@@ -136,10 +152,17 @@ class XenForoDownloader:
             log.debug("start_magnetio_daemon notice: %s", e)
 
         cookies_txt = load_user_cookies_text(self.user_id)
+        self.effective_ua = resolve_user_device_agent(
+            user_id=self.user_id,
+            cookies_text=cookies_txt,
+            custom_ua=self.user_agent,
+        )
+
         params: dict[str, Any] = {
             "url": url,
             "user_id": str(self.user_id) if self.user_id else None,
             "cookies": cookies_txt,
+            "userAgent": self.effective_ua,
             "passwords": self.passwords,
             "maxPages": self.max_pages,
         }
@@ -240,13 +263,22 @@ class XenForoDownloader:
         filename_hint: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> Path:
-        """Downloads a single resolved media file with chunked streaming."""
+        """Downloads a single resolved media file with chunked streaming and strict device spoofing."""
         if not settings.allow_private_network_urls:
             if await is_url_private_ip(url):
                 raise ValueError(f"Target URL points to a private/forbidden IP address: {url}")
 
+        effective_ua = getattr(self, "effective_ua", None) or resolve_user_device_agent(
+            user_id=self.user_id,
+            custom_ua=self.user_agent,
+        )
+        base_device_headers = get_device_headers(
+            effective_ua,
+            dest_type="image",
+            referer=headers.get("Referer") if headers else url,
+        )
         req_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            **base_device_headers,
             **(headers or {}),
         }
 
@@ -305,6 +337,7 @@ async def download_xenforo_post(
     on_progress: Callable[[int, str | None, str | None], None] | None = None,
     passwords: list[str] | None = None,
     max_pages: int = 1,
+    user_agent: str | None = None,
 ) -> list[Path]:
     """Helper to download XenForo thread/post media and return list of file paths."""
     downloader = XenForoDownloader(
@@ -313,6 +346,7 @@ async def download_xenforo_post(
         on_progress=on_progress,
         passwords=passwords,
         max_pages=max_pages,
+        user_agent=user_agent,
     )
     result = await downloader.download(url)
     if not result.ok:
@@ -334,6 +368,7 @@ async def run_with_progress(
     """
     passwords = []
     max_pages = 1
+    user_agent = None
 
     if extra_args:
         i = 0
@@ -350,6 +385,11 @@ async def run_with_progress(
                 except ValueError:
                     pass
                 i += 1
+            elif arg in ("-ua", "--ua", "--user-agent") and i + 1 < len(extra_args):
+                user_agent = str(extra_args[i + 1]).strip()
+                i += 1
+            elif arg.startswith(("--ua=", "--user-agent=")):
+                user_agent = arg.split("=", 1)[1].strip()
             i += 1
 
     downloader = XenForoDownloader(
@@ -358,6 +398,7 @@ async def run_with_progress(
         on_progress=on_progress,
         passwords=passwords,
         max_pages=max_pages,
+        user_agent=user_agent,
     )
 
     return await downloader.download(url)
