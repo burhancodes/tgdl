@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 8080;
 const TTL_STREAMS = parseInt(process.env.CACHE_TTL_STREAMS ?? '3600', 10);
 
 app.use(express.json());
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // ─── JSON-RPC 2.0 ─────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ app.post('/rpc', rpcMiddleware);
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'magnetio-scraper', version: '1.1.5' });
+  res.json({ status: 'ok', service: 'magnetio-scraper', version: '1.2.0' });
 });
 
 // ─── Provider list ────────────────────────────────────────────────────────────

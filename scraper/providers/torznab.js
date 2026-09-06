@@ -4,21 +4,25 @@
  */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
+import { resolveSafeTarget } from '../lib/ssrf.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { logger } from '../lib/logger.js';
 
-export const id   = 'torznab';
+export const id = 'torznab';
 export const name = 'Torznab';
 
 const CATEGORY_MOVIES = '2000';
-const CATEGORY_TV     = '5000';
+const CATEGORY_TV = '5000';
 
 export async function scrape(meta) {
   const baseUrl = meta.torznabUrl;
-  const apiKey  = meta.torznabApiKey;
+  const apiKey = meta.torznabApiKey;
   if (!baseUrl) return [];
 
-  if (!isUrlSafe(baseUrl)) {
+  // Resolve + validate the user-supplied URL and pin the verified IP so the
+  // request connects to exactly that address (closes the DNS-rebinding window).
+  const target = await resolveSafeTarget(baseUrl);
+  if (!target) {
     logger.warn('[Torznab] Rejected unsafe or invalid URL');
     return [];
   }
@@ -30,6 +34,7 @@ export async function scrape(meta) {
       limiterKey: 'torznab',
       timeout: 15_000,
       params,
+      lookup: target.lookup,
     });
 
     const $ = cheerio.load(data, { xmlMode: true });
@@ -78,25 +83,25 @@ function normalise(item, meta) {
   const infoHash = extractInfoHash(item);
   if (!infoHash) return null;
 
-  const seeders  = attrValue(item, 'seeders');
-  const peers    = attrValue(item, 'peers');
-  const sizeEl   = item.find('size').text();
-  const encLen   = item.find('enclosure').attr('length');
+  const seeders = attrValue(item, 'seeders');
+  const peers = attrValue(item, 'peers');
+  const sizeEl = item.find('size').text();
+  const encLen = item.find('enclosure').attr('length');
 
   const parsed = parseTitle(title);
 
   const parsedSeeders = parseInt(seeders, 10);
-  const parsedPeers   = parseInt(peers, 10);
-  const parsedSize    = parseInt(sizeEl || encLen || '0', 10);
+  const parsedPeers = parseInt(peers, 10);
+  const parsedSize = parseInt(sizeEl || encLen || '0', 10);
 
   return {
     infoHash,
     title,
-    seeders:  Number.isFinite(parsedSeeders) ? parsedSeeders : 0,
+    seeders: Number.isFinite(parsedSeeders) ? parsedSeeders : 0,
     leechers: Number.isFinite(parsedPeers) ? Math.max(0, parsedPeers - (parsedSeeders || 0)) : 0,
-    size:     Number.isFinite(parsedSize) ? parsedSize : 0,
+    size: Number.isFinite(parsedSize) ? parsedSize : 0,
     provider: 'Torznab',
-    imdbId:   meta.imdbId || null,
+    imdbId: meta.imdbId || null,
     ...parsed,
   };
 }
@@ -125,24 +130,6 @@ function extractInfoHash(item) {
 function attrValue(item, attrName) {
   const el = item.find(`torznab\\:attr[name="${attrName}"], attr[name="${attrName}"]`);
   return el.length ? el.attr('value') : null;
-}
-
-function isUrlSafe(urlStr) {
-  try {
-    const parsed = new URL(urlStr);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    const host = parsed.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') return false;
-    if (host.startsWith('10.')) return false;
-    if (host.startsWith('192.168.')) return false;
-    if (host.startsWith('169.254.')) return false;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
-    if (host.endsWith('.local') || host.endsWith('.internal')) return false;
-    if (host.includes('metadata.google') || host.includes('metadata.aws')) return false;
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function base32ToHex(base32) {
