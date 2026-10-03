@@ -8,7 +8,7 @@ This guide covers system prerequisites, manual local installation, environment v
 
 Before running TGDL Bot, ensure the following system dependencies are installed on your host OS:
 
-- **Go**: 1.23 or newer
+- **Go**: 1.26 or newer
 - **Node.js**: 18.0 or newer (required for running the Magnetio / XenForo search sidecar in `scraper/`).
 - **FFmpeg & FFprobe**: Required for video metadata extraction, thumbnail generation, and audio/video transcoding.
 - **aria2c**: Required for direct multi-connection HTTP downloads and torrent/magnet link handling.

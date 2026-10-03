@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
 # ---- build ----------------------------------------------------------------
-FROM golang:1.23-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
+ENV GOTOOLCHAIN=auto
 COPY . .
-# Commit the go.sum produced by `go mod tidy` for reproducible builds.
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tgdl ./cmd/tgdl
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tgdl ./cmd/tgdl
 
 # ---- runtime ----------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
