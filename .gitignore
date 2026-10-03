@@ -1,15 +1,15 @@
 # Environment & Local Secrets
-.env
-auth/
-data/
-logs/
-scratch/
-downloads/
-cookies.txt
+/.env
+/auth/
+/data/
+/logs/
+/scratch/
+/downloads/
+/cookies.txt
 
 # Binaries & Go build artifacts
-tgdl
-tgdl.exe
+/tgdl
+/tgdl.exe
 *.test
 *.out
 /dist/
