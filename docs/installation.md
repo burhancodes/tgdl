@@ -1,6 +1,6 @@
 # System Requirements & Installation Guide
 
-This guide covers system prerequisites, manual local installation, environment variables, and Docker deployment.
+This guide covers system prerequisites, manual local installation, environment variables, and Docker deployment for the refactored Go implementation of TGDL Bot.
 
 ---
 
@@ -8,19 +8,21 @@ This guide covers system prerequisites, manual local installation, environment v
 
 Before running TGDL Bot, ensure the following system dependencies are installed on your host OS:
 
-- **Python**: 3.12 or newer
-- **Node.js**: 18.0 or newer (required for running the Magnetio JSON-RPC scraper sidecar).
-- **uv**: Modern, fast Python package and project manager.
+- **Go**: 1.23 or newer
+- **Node.js**: 18.0 or newer (required for running the Magnetio / XenForo search sidecar in `scraper/`).
 - **FFmpeg & FFprobe**: Required for video metadata extraction, thumbnail generation, and audio/video transcoding.
 - **aria2c**: Required for direct multi-connection HTTP downloads and torrent/magnet link handling.
-- **System Archive Utilities** (for `patool` archive support):
+- **System Archive Utilities**:
   - Linux: `unzip`, `unrar` / `rar`, `p7zip-full` / `7z`, `tar`, `gzip`, `bzip2`, `xz-utils`
+- **External CLI Tools**:
+  - `gallery-dl` & `cyberdrop-dl-patched`: For image board and gallery downloads (`pip install gallery-dl cyberdrop-dl-patched`).
+  - Java JRE (`default-jre-headless`): For Android APK patching (`/patch`).
 
 ### Installing Prerequisites on Ubuntu / Debian
 ```bash
 sudo apt update
-sudo apt install -y python3 nodejs npm ffmpeg aria2 unzip p7zip-full tar gzip bzip2 xz-utils
-curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo apt install -y golang nodejs npm ffmpeg aria2 unzip unrar p7zip-full tar gzip bzip2 xz-utils default-jre-headless python3-pip
+pip install --break-system-packages gallery-dl cyberdrop-dl-patched
 ```
 
 ---
@@ -33,20 +35,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    cd tgdl
    ```
 
-2. **Sync Python Dependencies**:
-   ```bash
-   uv sync
-   ```
-
-3. **Install Magnetio Scraper Node Dependencies & Start Sidecar**:
+2. **Sync Node.js Dependencies for Scraper Sidecar**:
    ```bash
    cd scraper
-   npm install
-   RPC_SHARED_SECRET=your_rpc_secret_here PORT=8080 node index.js &
+   npm ci --omit=dev
    cd ..
    ```
 
-4. **Configure Environment Variables**:
+3. **Configure Environment Variables**:
    Copy `.env.example` to `.env` and fill in credentials:
    ```bash
    cp .env.example .env
@@ -55,37 +51,43 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    - `TG_API_ID`: Telegram API ID obtained from [my.telegram.org](https://my.telegram.org).
    - `TG_API_HASH`: Telegram API Hash.
    - `TG_BOT_TOKEN`: Bot token from [@BotFather](https://t.me/BotFather).
-   - `MAGNETIO_RPC_URL`: `http://localhost:8080/rpc` (or `http://magnetio-scraper:8080/rpc` when using Docker Compose).
-   - `MAGNETIO_RPC_SECRET`: Shared secret matching the scraper service (optional).
+   - `TG_BOT_API_URL`: URL of a local `telegram-bot-api` server if transfers > 50 MB are needed.
 
-5. **Start Everything with `./start.sh` (Recommended)**:
-   Run the launcher script to automatically manage the Node.js scraper sidecar and Python bot together:
+4. **Build and Run**:
+   Compile the Go binary and start the bot:
+   ```bash
+   go mod tidy
+   go build -o tgdl ./cmd/tgdl
+   ./tgdl
+   ```
+
+   *Alternatively, use the launcher script which handles sidecar npm sync and build automatically:*
    ```bash
    ./start.sh
    ```
-   *Alternatively, you can start the sidecar and bot manually as shown in step 3.*
 
 ---
 
-## Docker Deployment
+## Docker Deployment (Recommended)
 
-Deploy using Docker Compose or the pre-built GHCR images.
+Docker Compose runs a local `telegram-bot-api` server together with the Go `tgdl` bot container, removing the 50 MB Telegram cloud upload limit (supporting up to 2000 MB).
 
-### Quick Start with GHCR Images (`./start-docker.sh`)
-Run the Docker launcher script to pull the latest images from GHCR (`ghcr.io/burhancodes/tgdl`) and spin up the complete stack:
-
+### Launching with Docker Compose
 ```bash
-./start-docker.sh
+# 1. Ensure .env is populated with TG_API_ID, TG_API_HASH, and TG_BOT_TOKEN
+cp .env.example .env
+
+# 2. Build and launch stack
+docker compose up -d --build
+
+# 3. View live logs
+docker compose logs -f
 ```
 
-### Manual Docker Compose Launch
-1. Configure `.env` file as shown above (`MAGNETIO_RPC_URL=http://magnetio-scraper:8080/rpc`).
-2. Pull latest images and start containers:
-   ```bash
-   docker compose pull
-   docker compose up -d
-   ```
-3. View live container logs:
-   ```bash
-   docker compose logs -f
-   ```
+### Using Management Script (`./tgdl.sh`)
+```bash
+./tgdl.sh start      # Starts and builds containers
+./tgdl.sh logs       # Follow container logs
+./tgdl.sh stop       # Gracefully shut down containers
+./tgdl.sh clean      # Prune dangling images and build caches
+```

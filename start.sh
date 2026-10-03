@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-# TGDL Bot & Sidecar Services Launcher Script
+# TGDL Bot & Sidecar Services Launcher Script (Go Edition)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=========================================="
-echo " Starting TGDL Bot Services               "
+echo " Starting TGDL Bot Services (Go)          "
 echo "=========================================="
 
 # Check for .env file
@@ -34,7 +34,6 @@ mkdir -p data logs auth scratch
 # Ensure Node modules are installed and synced for scraper sidecar
 if command -v npm >/dev/null 2>&1; then
     if [ -d "scraper" ]; then
-        # Install dependencies without mutating lockfile or working tree
         if [ ! -d "scraper/node_modules" ] || [ "scraper/package.json" -nt "scraper/node_modules" ] || [ "scraper/package-lock.json" -nt "scraper/node_modules" ]; then
             echo "Syncing Node.js dependencies for scraper sidecar..."
             (cd scraper && (npm ci --silent 2>/dev/null || npm install --no-save --silent))
@@ -47,18 +46,10 @@ else
     fi
 fi
 
-# Ensure Python environment is synced
-if command -v uv >/dev/null 2>&1; then
-    echo "Syncing Python dependencies via uv..."
-    uv sync --frozen 2>/dev/null || uv sync
-else
-    echo "Warning: 'uv' tool not found in PATH. Using system Python environment."
-fi
+# Build Go binary if missing or if source files are newer
+echo "Building TGDL binary..."
+go build -o tgdl ./cmd/tgdl
 
 # Launch Bot
 echo "Launching TGDL Bot..."
-if command -v uv >/dev/null 2>&1; then
-    exec uv run python -m app.bot
-else
-    exec python3 -m app.bot
-fi
+exec ./tgdl "$@"

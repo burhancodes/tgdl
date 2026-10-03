@@ -20,8 +20,8 @@ ensure_env() {
             exit 1
         fi
     fi
-    mkdir -p data logs
-    chmod -R 777 data logs 2>/dev/null || true
+    mkdir -p data auth logs scratch
+    chmod -R 777 data auth logs scratch 2>/dev/null || true
 }
 
 auto_prune_garbage() {
@@ -33,18 +33,10 @@ auto_prune_garbage() {
 do_start() {
     ensure_env
     echo "=========================================="
-    echo " Starting TGDL Bot & Scraper              "
+    echo " Starting TGDL Bot Services               "
     echo "=========================================="
-    echo "Pulling latest images from GHCR..."
-    echo "  • Bot Image:     ${BOT_IMAGE}"
-    echo "  • Scraper Image: ${SCRAPER_IMAGE}"
-
-    docker pull "${SCRAPER_IMAGE}"
-    docker pull "${BOT_IMAGE}"
-
-    echo ""
     echo "Launching Docker Compose stack..."
-    docker compose up -d
+    docker compose up -d --build
 
     echo ""
     auto_prune_garbage

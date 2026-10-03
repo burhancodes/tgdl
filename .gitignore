@@ -1,17 +1,40 @@
-scraper/node_modules
-data/
+# Environment & Local Secrets
+.env
 auth/
+data/
 logs/
 scratch/
+downloads/
+cookies.txt
+
+# Binaries & Go build artifacts
+tgdl
+tgdl.exe
+*.test
+*.out
+/dist/
+
+# Node.js dependencies
+scraper/node_modules/
+
+# Python caches & virtualenvs
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pickle
+.venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Databases
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Editor & OS files
 .vscode/
-.venv
-.env
-**/__pycache__/
-*.py[cod]
-*.zip
-*.pickle
-cookies.txt
-downloads/
+.idea/
+.DS_Store
+Thumbs.db

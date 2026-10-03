@@ -1,86 +1,66 @@
-# tgdl-bot
+# tgdl (Go)
 
-An all-in-one Telegram media & file downloader, archive extractor, cloud storage mirror, and torrent manager. Powered by `gallery-dl`, `aria2c`, `Google Drive API`, and Pyrogram to support up to 2GB uploads per file with real-time status management.
+A Telegram bot that downloads from direct links, HLS, torrents/magnets, Google Drive, MEGA, GoFile,
+XenForo forums, gallery-dl / cyberdrop-dl sites, and uploads to Telegram or mirrors to GoFile,
+FileDitch and Pixeldrain. Go rewrite of the Python `tgdl` project.
 
----
+## Architecture
 
-## Documentation Index
-
-This project uses modular sub-documentation files located in the `docs/` directory:
-
-- **[Direct & Gallery Downloader Reference](docs/downloaders.md)**
-  - Direct HTTP/HTTPS downloads (`/dl`, `/direct`).
-  - Gallery-dl media extraction from 100+ sites (`/gdl`, `/gallerydl`).
-  - Server mirroring (`/m`, `/mirror`).
-  - Command flags (`-m`, `-tg`, `-uz`, `-p <password>`) and batch `.txt` link file processing.
-
-- **[Torrent Downloads & Search Engine](docs/torrents.md)**
-  - Headless torrent and magnet downloading (`/tor`).
-  - Interactive multi-provider Torrent Search Engine (`/ts`, `/torsearch`, `/search`).
-
-- **[Archive Extraction & Volume Splitting](docs/archives.md)**
-  - Single archive decompression (`/unzip [password]`).
-  - Split archive collector sessions (`/unzip split`).
-  - Multi-archive batch extractions (`/unzip multi`).
-  - Interactive password prompts and Telegram 2GB upload limit safeguards.
-
-- **[Cloud Storage & Google Drive Integration](docs/cloud_and_drive.md)**
-  - Google Drive folder and file downloader (`/gd2tg`).
-  - Google Drive authentication guide (Service Accounts & OAuth tokens).
-  - External cloud host uploaders: Pixeldrain (`/pdup`), GoFile (`/gfup`), FileDitch (`/fdup`).
-
-- **[Custom Configuration, Cookies & Task Controls](docs/configuration.md)**
-  - Per-user `gallery-dl.conf` and `cookies.txt` manager (`/gdlconf`).
-  - Live task monitor, queue dashboard, and speed metrics (`/status`).
-  - Job cancellation (`/cancel [job_id]`).
-
-- **[Installation & System Requirements](docs/installation.md)**
-  - System prerequisites (FFmpeg, aria2, archive utilities).
-  - Local virtual environment setup and configuration.
-  - Docker deployment using `docker-compose`.
-
----
-
-## Quick Reference Overview
-
-### Core Commands
-
-| Command | Aliases | Description | Sub-Documentation |
-| :--- | :--- | :--- | :--- |
-| `/dl [flags] <url>` | `/direct` | Download direct HTTP/HTTPS URLs. | [Downloaders](docs/downloaders.md) |
-| `/gdl [flags] <url>` | `/gallerydl` | Download albums/posts via gallery-dl. | [Downloaders](docs/downloaders.md) |
-| `/mega [flags] <url>` | `/meganz` | Download files & folders from mega.nz / mega.co.nz / mega.io. | [Downloaders](docs/downloaders.md) |
-| `/mega -login <email:pass>` | `/mega -logout`, `/mega -account` | Manage personal MEGA account credentials. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/m [flags] <url>` | `/mirror` | Mirror links/files to server. | [Downloaders](docs/downloaders.md) |
-| `/tor <magnet/url>` | — | Download torrent magnet or `.torrent` file. | [Torrents](docs/torrents.md) |
-| `/ts <query>` | `/torsearch`, `/search` | Search torrents with inline pagination. | [Torrents](docs/torrents.md) |
-| `/unzip [password]` | — | Extract archive files. | [Archives](docs/archives.md) |
-| `/unzip split` | — | Multi-part split archive collector session. | [Archives](docs/archives.md) |
-| `/unzip multi` | — | Multi-archive batch extraction session. | [Archives](docs/archives.md) |
-| `/gd2tg <gdrive_link>` | — | Download Google Drive link to Telegram. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/pdup` | — | Upload replied media to Pixeldrain. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/gfup` | `/gofile` | Upload replied media to GoFile. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/fdup` | `/fileditch` | Upload replied media to FileDitch. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/gofilekey <token>` | `/gofile_key` | Manage personal GoFile API key. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/pdkey <key>` | `/pixeldrainkey` | Manage personal Pixeldrain API key. | [Cloud & Drive](docs/cloud_and_drive.md) |
-| `/gdlconf` | `/gdl_config` | Manage custom gallery-dl config & cookies. | [Configuration](docs/configuration.md) |
-| `/status` | — | Interactive real-time task manager. | [Configuration](docs/configuration.md) |
-| `/cancel [job_id]` | — | Cancel active/queued job. | [Configuration](docs/configuration.md) |
-| `/help` | `/start` | Open interactive paged help menu. | — |
-
----
-
-## Quick Start Example
-
-```bash
-# 1. Clone repository
-git clone https://github.com/Burhanverse/tgdl.git
-cd tgdl
-
-# 2. Synchronize dependencies using uv
-uv sync
-
-# 3. Configure credentials in .env and launch with ./start.sh
-cp .env.example .env
-./start.sh
 ```
+cmd/tgdl            entrypoint, dependency wiring, graceful shutdown
+internal/
+  config            env → typed Config (validated once)
+  store             SQLite job repository (pure-Go driver, WAL)
+  tg                Telegram interface + Bot API adapter (swap MTProto in here only)
+  bot               command/callback handlers (thin: parse → enqueue)
+  jobs              Manager (queue, per-job State, status card), pipeline, pluggable Sources
+  dl                engines: direct HTTP, HLS, GoFile, gallery-dl/cyberdrop-dl runner, XenForo
+  torrent           aria2 RPC daemon supervisor, tracker list, Magnetio search client
+  gdrive, mega      cloud downloaders (MEGA public-link protocol implemented natively)
+  upload            GoFile / FileDitch / Pixeldrain uploads, per-user API keys
+  archive, media    extraction/creation, split-archive detection, ffmpeg wrappers
+  apk               APKEditor + tgpatcher + uber-apk-signer pipeline
+  netguard          SSRF-safe HTTP transport (checks the connected IP, not a pre-resolve)
+  pacing, status, fsutil, auth, logging
+```
+
+Key design changes from the Python version:
+
+* **Sources are plugins.** `jobs.Source{Name, Match, Fetch}` replaces the 900-line `if/elif` download
+  function; add a provider by implementing the interface and registering it in `DefaultSources`.
+* **No global mutable registries.** Interactive prompts (archive choice, audio conversion,
+  passwords) live in the job's own `State`, and disappear with it.
+* **One cancellation model.** Every job has a `context.Context`; cancel kills subprocesses,
+  aria2 GIDs and HTTP streams through it.
+* **No engine recursion.** The gallery-dl ⇄ cyberdrop-dl fallback is an ordered chain per URL.
+* **SSRF protection at dial time**, covering redirects, DNS rebinding, HLS segments.
+* **Zip-slip / tar traversal protection** in extraction; passwords never echoed to chat.
+* Status card rendering is a pure function of a `Snapshot` (`internal/status`), unit-tested.
+
+## Telegram transport (important)
+
+The Bot API cloud limits uploads to 50 MB. For files up to ~2 GB run a self-hosted
+`telegram-bot-api --local` server (included in `docker-compose.yml`) and set `TG_BOT_API_URL`.
+Without it the bot works but splits/skips anything above ~49 MB.
+
+## Build & run
+
+```
+go mod tidy          # resolves dependencies and writes go.sum
+go vet ./... && go test ./...
+go build -o tgdl ./cmd/tgdl
+```
+
+or `docker compose up -d --build`. Configuration keys are unchanged from the Python version
+(`.env.example`), plus `TG_BOT_API_URL`.
+
+External tools used at runtime: `ffmpeg`, `aria2c`, `7z`/`unrar`/`unzip`, `gallery-dl`,
+`cyberdrop-dl`, `java` + `python3` (APK patching), `node` (torrent-search / forum sidecar in `scraper/`).
+
+## Behaviour notes / known differences
+
+* The "split large file?" prompt was dropped; oversized files split automatically (video-aware,
+  binary fallback), as the previous default did.
+* Pinning of the status message and the `/settings`-style split toggle are not ported.
+* Interactive multi-part archive upload sessions (`/unzip` with manually uploaded parts) are not
+  ported; use a URL, or a single archive.

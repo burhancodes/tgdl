@@ -44,13 +44,12 @@ jobs:
           REPO_NAME: ${{ github.repository }}
         run: |
           LOWER_REPO=$(echo "${REPO_NAME}" | tr '[:upper:]' '[:lower:]')
-          export BOT_IMAGE="ghcr.io/${LOWER_REPO}/tgdl-bot:latest"
-          export SCRAPER_IMAGE="ghcr.io/${LOWER_REPO}/magnetio-scraper:latest"
+          export BOT_IMAGE="ghcr.io/${LOWER_REPO}:latest"
 
-          echo "Building images: ${BOT_IMAGE} and ${SCRAPER_IMAGE}..."
-          docker compose build --parallel
+          echo "Building image: ${BOT_IMAGE}..."
+          docker compose build tgdl
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "Pushing images to GHCR..."
-            docker compose push
+            echo "Pushing image to GHCR..."
+            docker compose push tgdl
           fi

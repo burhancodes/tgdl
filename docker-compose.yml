@@ -1,33 +1,30 @@
 services:
-  magnetio-scraper:
-    image: ${SCRAPER_IMAGE:-ghcr.io/burhanverse/tgdl-bot/magnetio-scraper:latest}
-    build:
-      context: ./scraper
-      dockerfile: Dockerfile
+  # A self-hosted Bot API server lifts the cloud Bot API limits (50MB up /
+  # 20MB down) to 2000MB. Get api id/hash from https://my.telegram.org.
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
     restart: unless-stopped
     environment:
-      - PORT=8080
-      - RPC_SHARED_SECRET=${MAGNETIO_RPC_SECRET:-}
-      - SCRAPER_PROVIDER_TIMEOUT_MS=${SCRAPER_PROVIDER_TIMEOUT_MS:-20000}
-      - SCRAPER_HARD_TIMEOUT_MS=${SCRAPER_HARD_TIMEOUT_MS:-30000}
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
+      TELEGRAM_API_ID: ${TG_API_ID}
+      TELEGRAM_API_HASH: ${TG_API_HASH}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - botapi-data:/var/lib/telegram-bot-api
 
-  tgdl-bot:
-    image: ${BOT_IMAGE:-ghcr.io/burhanverse/tgdl-bot/tgdl-bot:latest}
+  tgdl:
+    image: ${BOT_IMAGE:-ghcr.io/burhanverse/tgdl:latest}
     build: .
+    restart: unless-stopped
+    depends_on: [telegram-bot-api]
     env_file: .env
-    depends_on:
-      magnetio-scraper:
-        condition: service_started
     environment:
-      - MAGNETIO_RPC_URL=http://magnetio-scraper:8080/rpc
+      TG_BOT_API_URL: http://telegram-bot-api:8081
     volumes:
       - ./data:/app/data
+      - ./auth:/app/auth
       - ./logs:/app/logs
-    restart: unless-stopped
-    stop_grace_period: 30s
+      # Lets the bot read files the local Bot API server saved for getFile.
+      - botapi-data:/var/lib/telegram-bot-api:ro
+
+volumes:
+  botapi-data:
