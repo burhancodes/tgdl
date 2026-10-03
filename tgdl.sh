@@ -33,10 +33,18 @@ auto_prune_garbage() {
 do_start() {
     ensure_env
     echo "=========================================="
-    echo " Starting TGDL Bot Services               "
+    echo " Starting TGDL Bot & Scraper              "
     echo "=========================================="
+    echo "Pulling latest images from GHCR..."
+    echo "  • Bot Image:     ${BOT_IMAGE}"
+    echo "  • Scraper Image: ${SCRAPER_IMAGE}"
+
+    docker pull "${SCRAPER_IMAGE}" || true
+    docker pull "${BOT_IMAGE}" || true
+
+    echo ""
     echo "Launching Docker Compose stack..."
-    docker compose up -d --build
+    docker compose up -d "$@"
 
     echo ""
     auto_prune_garbage
@@ -125,6 +133,7 @@ show_help() {
     echo ""
     echo "Commands:"
     echo "  start     - Pull latest images & start all services (default)"
+    echo "  build     - Build Docker images locally from source"
     echo "  stop      - Stop & remove running containers"
     echo "  restart   - Restart all services"
     echo "  update    - Pull git repo, fetch latest images, and restart"
@@ -135,10 +144,16 @@ show_help() {
 }
 
 ACTION="${1:-start}"
+shift || true
 
 case "$ACTION" in
     start)
-        do_start
+        do_start "$@"
+        ;;
+    build)
+        ensure_env
+        echo "Building images locally with Docker Compose..."
+        docker compose build "$@"
         ;;
     stop)
         do_stop
