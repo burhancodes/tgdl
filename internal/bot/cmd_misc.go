@@ -445,10 +445,24 @@ func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Upda
 		_ = a.tg.Edit(ctx, ref, "Search failed: "+code(status.Short(err.Error(), 300)), tg.SendOpts{})
 		return
 	}
-	site := "all"
+	site := "All Providers"
 	if len(providers) > 0 {
 		site = strings.Join(providers, ", ")
 	}
+
+	if len(res) == 0 {
+		_ = a.tg.Edit(ctx, ref, "<b>No torrent results found</b> for <i>"+esc(query)+"</i>.", tg.SendOpts{})
+		return
+	}
+
+	pageURL, terr := a.telegraph.PublishTorrentResults(sctx, res, query, site)
+	if terr == nil && pageURL != "" {
+		kb := tg.Keyboard{{{Text: "VIEW", URL: pageURL}}}
+		text := fmt.Sprintf("<b>Found %d result(s) for</b> <i>%s</i>\n<b>Source:</b> <i>%s</i>", len(res), esc(query), esc(site))
+		_ = a.tg.Edit(ctx, ref, text, tg.SendOpts{Keyboard: kb})
+		return
+	}
+
 	text := torrent.FormatHTML(res, query, site)
 	if len(text) > 4000 {
 		text = text[:4000]

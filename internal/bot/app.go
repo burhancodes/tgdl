@@ -19,6 +19,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
+	"github.com/burhanverse/tgdl/internal/telegraph"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 	"github.com/burhanverse/tgdl/internal/upload"
@@ -26,38 +27,44 @@ import (
 
 // App holds everything the handlers need.
 type App struct {
-	cfg    *config.Config
-	auth   *auth.Authorizer
-	store  *store.Store
-	mgr    *jobs.Manager
-	tg     tg.Client
-	api    *tg.BotAPI
-	keys   *upload.Keys
-	hosts  *upload.Hosts
-	search *torrent.Magnetio
-	lim    *pacing.TelegramLimiter
-	runner *dl.Runner
+	cfg       *config.Config
+	auth      *auth.Authorizer
+	store     *store.Store
+	mgr       *jobs.Manager
+	tg        tg.Client
+	api       *tg.BotAPI
+	keys      *upload.Keys
+	hosts     *upload.Hosts
+	search    *torrent.Magnetio
+	lim       *pacing.TelegramLimiter
+	runner    *dl.Runner
+	telegraph *telegraph.Helper
 }
 
 // Deps groups constructor arguments.
 type Deps struct {
-	Cfg    *config.Config
-	Auth   *auth.Authorizer
-	Store  *store.Store
-	Mgr    *jobs.Manager
-	Keys   *upload.Keys
-	Hosts  *upload.Hosts
-	Search *torrent.Magnetio
-	Lim    *pacing.TelegramLimiter
-	Runner *dl.Runner
+	Cfg       *config.Config
+	Auth      *auth.Authorizer
+	Store     *store.Store
+	Mgr       *jobs.Manager
+	Keys      *upload.Keys
+	Hosts     *upload.Hosts
+	Search    *torrent.Magnetio
+	Lim       *pacing.TelegramLimiter
+	Runner    *dl.Runner
+	Telegraph *telegraph.Helper
 }
 
 // New builds the Telegram bot, registers all handlers and returns the app and
 // the underlying bot (whose Start blocks until ctx is cancelled). The jobs
 // manager needs a tg.Client, so callers construct the bot first via NewClient.
 func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
+	tele := d.Telegraph
+	if tele == nil {
+		tele = telegraph.NewHelper()
+	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
-		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner}
+		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele}
 	a.register(b)
 	return a
 }

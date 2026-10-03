@@ -18,8 +18,12 @@ type MessageRef struct {
 // Valid reports whether the ref points at a real message.
 func (m MessageRef) Valid() bool { return m.ID != 0 }
 
-// Button is one inline keyboard button carrying callback data.
-type Button struct{ Text, Data string }
+// Button is one inline keyboard button carrying callback data or a URL.
+type Button struct {
+	Text string
+	Data string
+	URL  string
+}
 
 // Keyboard is rows of inline buttons.
 type Keyboard [][]Button

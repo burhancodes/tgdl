@@ -129,7 +129,7 @@ func commands() []tg.Command {
 		{Name: "mega", Description: "Download file or folder from MEGA"},
 		{Name: "gdlconf", Description: "Manage your gallery-dl config and cookies"},
 		{Name: "gd2tg", Description: "Download Google Drive link to Telegram"},
-		{Name: "gofile", Description: "Upload replied media to GoFile"},
+		{Name: "gofile", Description: "Download GoFile links or upload replied media"},
 		{Name: "fileditch", Description: "Upload replied media to FileDitch"},
 		{Name: "pdup", Description: "Upload replied media to Pixeldrain"},
 		{Name: "patch", Description: "Decompile, patch, sign & upload an APK"},

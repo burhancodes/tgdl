@@ -41,7 +41,13 @@ func markup(o SendOpts) models.ReplyMarkup {
 	rows := make([][]models.InlineKeyboardButton, len(o.Keyboard))
 	for i, r := range o.Keyboard {
 		for _, b := range r {
-			rows[i] = append(rows[i], models.InlineKeyboardButton{Text: b.Text, CallbackData: b.Data})
+			btn := models.InlineKeyboardButton{Text: b.Text}
+			if b.URL != "" {
+				btn.URL = b.URL
+			} else {
+				btn.CallbackData = b.Data
+			}
+			rows[i] = append(rows[i], btn)
 		}
 	}
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
