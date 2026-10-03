@@ -131,7 +131,7 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"gd2tg", "gdrive", "gd"}, a.cmdDrive)
 	cmd([]string{"unzip"}, a.cmdUnzip)
 	cmd([]string{"pdup"}, a.cmdHostUpload("pixeldrain"))
-	cmd([]string{"gofile", "gfup", "gfdl", "gf2tg"}, a.cmdHostUpload("gofile"))
+	cmd([]string{"gofile", "gfup", "gfdl", "gf2tg"}, a.cmdGofile)
 	cmd([]string{"fileditch", "fdup"}, a.cmdHostUpload("fileditch"))
 	cmd([]string{"gofilekey", "gofile_key"}, a.cmdKey("gofile", "GoFile"))
 	cmd([]string{"pdkey", "pixeldrainkey", "pd_key"}, a.cmdKey("pixeldrain", "Pixeldrain"))

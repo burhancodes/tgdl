@@ -148,7 +148,16 @@ func GofileBypassURL(cfg *config.Config, raw string) string {
 		trailing = "/" + trailing
 	}
 	clean := StripGofilePrefix(raw)
-	out := url.URL{Scheme: "https", Host: cfg.GofileBypassHost, Path: "/" + cid + trailing}
+	scheme := "https"
+	host := cfg.GofileBypassHost
+	if strings.HasPrefix(host, "http://") {
+		scheme = "http"
+		host = strings.TrimPrefix(host, "http://")
+	} else if strings.HasPrefix(host, "https://") {
+		scheme = "https"
+		host = strings.TrimPrefix(host, "https://")
+	}
+	out := url.URL{Scheme: scheme, Host: host, Path: "/" + cid + trailing}
 	if u, err := url.Parse(clean); err == nil {
 		q := u.Query()
 		q.Del("noredirect")
@@ -158,26 +167,63 @@ func GofileBypassURL(cfg *config.Config, raw string) string {
 	return out.String()
 }
 
-// DownloadGofile downloads GoFile links through the bypass host.
-func DownloadGofile(ctx context.Context, cfg *config.Config, dest, contents string, progress ProgressFunc) ([]string, error) {
+type rawGofileItem struct {
+	URL      string `json:"url"`
+	Filename string `json:"filename"`
+	Path     string `json:"path"`
+}
+
+func parseGofileItems(cfg *config.Config, contents string) []item {
 	contents = strings.TrimSpace(contents)
-	var raw []string
-	if strings.HasPrefix(contents, "[") {
-		_ = json.Unmarshal([]byte(contents), &raw)
-	}
-	if len(raw) == 0 {
-		raw = strings.Fields(contents)
-	}
 	var items []item
-	for _, r := range raw {
-		if r = strings.TrimSpace(r); r != "" {
-			items = append(items, item{URL: GofileBypassURL(cfg, r)})
+	if strings.HasPrefix(contents, "[") {
+		var objList []rawGofileItem
+		if json.Unmarshal([]byte(contents), &objList) == nil && len(objList) > 0 {
+			for _, it := range objList {
+				u := strings.TrimSpace(it.URL)
+				if u != "" {
+					items = append(items, item{
+						URL:      GofileBypassURL(cfg, u),
+						Filename: it.Filename,
+						Subpath:  it.Path,
+					})
+				}
+			}
+			if len(items) > 0 {
+				return items
+			}
+		}
+		var strList []string
+		if json.Unmarshal([]byte(contents), &strList) == nil && len(strList) > 0 {
+			for _, u := range strList {
+				u = strings.TrimSpace(u)
+				if u != "" {
+					items = append(items, item{URL: GofileBypassURL(cfg, u)})
+				}
+			}
+			if len(items) > 0 {
+				return items
+			}
 		}
 	}
+	for _, f := range strings.Fields(contents) {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			items = append(items, item{URL: GofileBypassURL(cfg, f)})
+		}
+	}
+	return items
+}
+
+// DownloadGofile downloads GoFile links through the bypass host.
+func DownloadGofile(ctx context.Context, cfg *config.Config, dest, contents string, progress ProgressFunc) ([]string, error) {
+	items := parseGofileItems(cfg, contents)
 	if len(items) == 0 {
 		return nil, errors.New("no valid GoFile URLs provided for download")
 	}
-	sort.SliceStable(items, func(i, j int) bool { return fsutil.NaturalPathLess(itemKey(items[i]), itemKey(items[j])) })
+	if len(items) > 1 {
+		sort.SliceStable(items, func(i, j int) bool { return fsutil.NaturalPathLess(itemKey(items[i]), itemKey(items[j])) })
+	}
 	d := NewDirect(cfg, progress)
 	files, err := d.DownloadItems(ctx, dest, items)
 	if err != nil {

@@ -164,6 +164,26 @@ func parseItems(contents string) []item {
 	contents = strings.TrimSpace(contents)
 	var items []item
 	if strings.HasPrefix(contents, "[") {
+		var objList []struct {
+			URL      string `json:"url"`
+			Filename string `json:"filename"`
+			Path     string `json:"path"`
+		}
+		if json.Unmarshal([]byte(contents), &objList) == nil && len(objList) > 0 {
+			for _, it := range objList {
+				u := stripPrefixes(it.URL)
+				if u != "" {
+					items = append(items, item{
+						URL:      u,
+						Filename: it.Filename,
+						Subpath:  it.Path,
+					})
+				}
+			}
+			if len(items) > 0 {
+				return items
+			}
+		}
 		var list []string
 		if json.Unmarshal([]byte(contents), &list) == nil {
 			for _, u := range list {

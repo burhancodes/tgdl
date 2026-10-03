@@ -2,10 +2,12 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +30,7 @@ func (a *App) cmdHelp(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 func urlsFromText(text string) []string {
 	var out []string
 	for _, t := range strings.Fields(text) {
-		if strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "magnet:") {
+		if isURLToken(t) {
 			out = append(out, t)
 		}
 	}
@@ -52,7 +54,7 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 	}
 	var out []string
 	for _, line := range strings.Split(string(b), "\n") {
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+		if line = strings.TrimSpace(line); isURLToken(line) {
 			out = append(out, line)
 		}
 	}
@@ -137,12 +139,55 @@ func (a *App) cmdEngine(engine, name string) tgbot.HandlerFunc {
 	}
 }
 
+func (a *App) cmdGofile(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+	m := u.Message
+	f := parseFlags(tokens(m))
+	urls := a.collectURLs(ctx, m, f.URLs)
+
+	if len(urls) == 0 {
+		for _, t := range tokens(m) {
+			if !strings.HasPrefix(t, "-") && dl.IsGofileURL(a.cfg, t) {
+				urls = append(urls, t)
+			}
+		}
+	}
+
+	if len(urls) == 0 {
+		if _, media := mediaSource(m); media != nil {
+			go a.hostUpload(context.WithoutCancel(ctx), m, media, "gofile")
+			return
+		}
+	}
+
+	if len(urls) == 0 {
+		a.reply(ctx, m, "Please provide a GoFile link to download (e.g. <code>/gofile &lt;url&gt;</code> or <code>/gfdl &lt;url&gt;</code>), "+
+			"or reply to a media message with <code>/gfup</code> to upload it to GoFile.")
+		return
+	}
+
+	for i, x := range urls {
+		if !strings.HasPrefix(x, "gofile:") && !strings.HasPrefix(x, "gf:") && !strings.HasPrefix(x, "gfdl:") && !strings.HasPrefix(x, "gf2tg:") {
+			urls[i] = "gofile:" + x
+		}
+	}
+
+	a.enqueue(ctx, m, jobTarget(urls), dl.Args{
+		IsMirror: f.Mirror,
+		UploadTG: f.TG || !f.Mirror,
+		Unzip:    f.Unzip,
+		Password: f.Password,
+	})
+}
+
 func (a *App) cmdMega(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message
-	var urls []string
-	for _, t := range tokens(m) {
-		if strings.Contains(t, "mega.") || strings.HasPrefix(t, "mega:") {
-			urls = append(urls, t)
+	f := parseFlags(tokens(m))
+	urls := a.collectURLs(ctx, m, f.URLs)
+	if len(urls) == 0 {
+		for _, t := range tokens(m) {
+			if strings.Contains(t, "mega.") || strings.HasPrefix(t, "mega:") {
+				urls = append(urls, t)
+			}
 		}
 	}
 	if len(urls) == 0 && m.ReplyToMessage != nil {
@@ -153,17 +198,101 @@ func (a *App) cmdMega(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		}
 	}
 	if len(urls) == 0 {
-		a.reply(ctx, m, "Usage: <code>/mega &lt;mega.nz link&gt;</code>")
+		a.reply(ctx, m, "Usage: <code>/mega [-m] [-tg] [-uz] [-p password] &lt;mega.nz link&gt;</code> (or reply to a message or .txt file containing links)")
 		return
 	}
-	a.enqueue(ctx, m, jobTarget(urls), dl.Args{})
+	for i, x := range urls {
+		if !strings.HasPrefix(x, "mega:") {
+			urls[i] = "mega:" + x
+		}
+	}
+	a.enqueue(ctx, m, jobTarget(urls), dl.Args{
+		IsMirror: f.Mirror,
+		UploadTG: f.TG || !f.Mirror,
+		Unzip:    f.Unzip,
+		Password: f.Password,
+	})
 }
 
 func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message
-	urls := a.collectURLs(ctx, m, parseFlags(tokens(m)).URLs)
+	uid := userID(m)
+
+	if m.ReplyToMessage != nil && m.ReplyToMessage.Document != nil && strings.HasSuffix(strings.ToLower(m.ReplyToMessage.Document.FileName), ".json") {
+		if uid <= 0 {
+			a.reply(ctx, m, "Could not determine your user ID. Credential upload must be performed by an identified user.")
+			return
+		}
+		userAuthDir := filepath.Join(a.cfg.AuthDir, strconv.FormatInt(uid, 10))
+		tmpDir, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_gd_cred_")
+		if err != nil {
+			a.reply(ctx, m, "Storage error: "+code(err.Error()))
+			return
+		}
+		defer os.RemoveAll(tmpDir)
+
+		f := mediaOf(m.ReplyToMessage)
+		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmpDir, nil)
+		if err != nil {
+			a.reply(ctx, m, "Download failed: "+code(err.Error()))
+			return
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			a.reply(ctx, m, "Read failed: "+code(err.Error()))
+			return
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			a.reply(ctx, m, "Invalid JSON file: "+code(err.Error()))
+			return
+		}
+
+		if err := os.MkdirAll(userAuthDir, 0o700); err != nil {
+			a.reply(ctx, m, "Failed to create auth directory: "+code(err.Error()))
+			return
+		}
+
+		if parsed["type"] == "service_account" {
+			saDir := filepath.Join(userAuthDir, "accounts")
+			_ = os.MkdirAll(saDir, 0o700)
+			safeName := filepath.Base(f.Name)
+			if safeName == "" || safeName == "." {
+				safeName = "service_account.json"
+			}
+			dest := filepath.Join(saDir, safeName)
+			if err := os.WriteFile(dest, data, 0o600); err != nil {
+				a.reply(ctx, m, "Failed to save service account: "+code(err.Error()))
+				return
+			}
+			a.reply(ctx, m, fmt.Sprintf("✓ Service Account JSON saved for user <code>%d</code> to <code>%s</code>.\nYou can now use <code>/gd2tg &lt;link&gt;</code> to download Google Drive links!", uid, esc(safeName)))
+			return
+		} else if _, hasToken := parsed["token"]; hasToken || parsed["refresh_token"] != nil {
+			dest := filepath.Join(userAuthDir, "token.json")
+			if err := os.WriteFile(dest, data, 0o600); err != nil {
+				a.reply(ctx, m, "Failed to save OAuth token: "+code(err.Error()))
+				return
+			}
+			a.reply(ctx, m, fmt.Sprintf("✓ OAuth token saved for user <code>%d</code> (<code>token.json</code>).\nYou can now use <code>/gd2tg &lt;link&gt;</code> to download Google Drive links!", uid))
+			return
+		} else if _, hasInst := parsed["installed"]; hasInst || parsed["web"] != nil || parsed["client_id"] != nil {
+			dest := filepath.Join(userAuthDir, "credentials.json")
+			if err := os.WriteFile(dest, data, 0o600); err != nil {
+				a.reply(ctx, m, "Failed to save OAuth credentials: "+code(err.Error()))
+				return
+			}
+			a.reply(ctx, m, fmt.Sprintf("✓ OAuth client credentials saved for user <code>%d</code> (<code>credentials.json</code>).", uid))
+			return
+		} else {
+			a.reply(ctx, m, "Unrecognized JSON structure. Expected a Google Cloud Service Account JSON key or OAuth token (<code>token.json</code> / <code>credentials.json</code>).")
+			return
+		}
+	}
+
+	f := parseFlags(tokens(m))
+	urls := a.collectURLs(ctx, m, f.URLs)
 	if len(urls) == 0 {
-		a.reply(ctx, m, "Usage: <code>/gd2tg &lt;Google Drive link&gt;</code>")
+		a.reply(ctx, m, "Usage: <code>/gd2tg [-m] [-tg] [-uz] [-p password] &lt;Google Drive link&gt;</code> (or reply to a message, .txt file containing links, or .json credential file)")
 		return
 	}
 	for i, x := range urls {
@@ -171,7 +300,12 @@ func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			urls[i] = "gdrive:" + x
 		}
 	}
-	a.enqueue(ctx, m, jobTarget(urls), dl.Args{})
+	a.enqueue(ctx, m, jobTarget(urls), dl.Args{
+		IsMirror: f.Mirror,
+		UploadTG: f.TG || !f.Mirror,
+		Unzip:    f.Unzip,
+		Password: f.Password,
+	})
 }
 
 // torrentFileTarget saves a replied .torrent document and returns its job target.
