@@ -100,13 +100,47 @@ func (m *Magnetio) probe(ctx context.Context, rpcURL, secret string) bool {
 	return resp.StatusCode == 200 && json.NewDecoder(resp.Body).Decode(&v) == nil && v.Status == "ok"
 }
 
+func isLocalEndpoint(rawURL string) bool {
+	if rawURL == "" {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == ""
+}
+
 // Start connects to an existing sidecar or launches ./scraper/index.js.
 func (m *Magnetio) Start(ctx context.Context) {
-	if m.cfg.MagnetioURL != "" && m.probe(ctx, m.cfg.MagnetioURL, m.cfg.MagnetioSecret) {
-		slog.Info("connected to existing Magnetio RPC service", "url", m.cfg.MagnetioURL)
-		m.loadProviders(ctx)
-		return
+	if m.cfg.MagnetioURL != "" {
+		maxAttempts := 30
+		if isLocalEndpoint(m.cfg.MagnetioURL) {
+			maxAttempts = 3
+		}
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			if m.probe(ctx, m.cfg.MagnetioURL, m.cfg.MagnetioSecret) {
+				slog.Info("connected to existing Magnetio RPC service", "url", m.cfg.MagnetioURL)
+				m.mu.Lock()
+				m.rpcURL = m.cfg.MagnetioURL
+				m.secret = m.cfg.MagnetioSecret
+				m.mu.Unlock()
+				m.loadProviders(ctx)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+			}
+		}
+		if !isLocalEndpoint(m.cfg.MagnetioURL) {
+			slog.Warn("cannot connect to configured Magnetio RPC service after retries", "url", m.cfg.MagnetioURL)
+			return
+		}
 	}
+
 	index := filepath.Join("scraper", "index.js")
 	if _, err := os.Stat(index); err != nil {
 		slog.Warn("scraper/index.js not found; torrent search unavailable")
@@ -143,22 +177,24 @@ func (m *Magnetio) Start(ctx context.Context) {
 	}
 	go func() { _ = cmd.Wait() }()
 	u := fmt.Sprintf("http://127.0.0.1:%d/rpc", port)
-	m.mu.Lock()
-	m.cmd, m.rpcURL, m.secret = cmd, u, secret
-	m.mu.Unlock()
 	for i := 0; i < 30; i++ {
 		if m.probe(ctx, u, secret) {
 			slog.Info("Magnetio scraper healthy", "port", port)
+			m.mu.Lock()
+			m.cmd, m.rpcURL, m.secret = cmd, u, secret
+			m.mu.Unlock()
 			m.loadProviders(ctx)
 			return
 		}
 		select {
 		case <-ctx.Done():
+			_ = cmd.Process.Kill()
 			return
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	slog.Warn("Magnetio scraper health check timed out", "port", port)
+	_ = cmd.Process.Kill()
 }
 
 // Stop terminates a locally supervised sidecar.
@@ -245,6 +281,13 @@ func (m *Magnetio) loadProviders(ctx context.Context) {
 // Providers returns id->name for available search providers.
 func (m *Magnetio) Providers() map[string]string {
 	m.mu.Lock()
+	if len(m.providers) == 0 {
+		m.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		m.loadProviders(ctx)
+		cancel()
+		m.mu.Lock()
+	}
 	defer m.mu.Unlock()
 	out := make(map[string]string, len(m.providers))
 	for k, v := range m.providers {
