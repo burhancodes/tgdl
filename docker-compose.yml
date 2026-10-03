@@ -11,14 +11,37 @@ services:
     volumes:
       - botapi-data:/var/lib/telegram-bot-api
 
+  magnetio-scraper:
+    image: ${SCRAPER_IMAGE:-ghcr.io/burhanverse/tgdl-bot/magnetio-scraper:latest}
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - RPC_SHARED_SECRET=${MAGNETIO_RPC_SECRET:-}
+      - SCRAPER_PROVIDER_TIMEOUT_MS=${SCRAPER_PROVIDER_TIMEOUT_MS:-20000}
+      - SCRAPER_HARD_TIMEOUT_MS=${SCRAPER_HARD_TIMEOUT_MS:-30000}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
   tgdl:
-    image: ${BOT_IMAGE:-ghcr.io/burhanverse/tgdl:latest}
+    image: ${BOT_IMAGE:-ghcr.io/burhanverse/tgdl-bot/tgdl-bot:latest}
     build: .
     restart: unless-stopped
-    depends_on: [telegram-bot-api]
+    depends_on:
+      telegram-bot-api:
+        condition: service_started
+      magnetio-scraper:
+        condition: service_started
     env_file: .env
     environment:
       TG_BOT_API_URL: http://telegram-bot-api:8081
+      MAGNETIO_RPC_URL: http://magnetio-scraper:8080/rpc
     volumes:
       - ./data:/app/data
       - ./auth:/app/auth
