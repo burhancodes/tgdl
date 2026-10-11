@@ -205,7 +205,12 @@ func (d *Direct) getText(ctx context.Context, u string) (string, string, error) 
 	return string(b), resp.Request.URL.String(), err
 }
 
-func (d *Direct) getBytes(ctx context.Context, u string) ([]byte, error) {
+func (d *Direct) getBoundedBytes(ctx context.Context, u string, limit int64) ([]byte, error) {
+	if !d.cfg.AllowPrivateURLs {
+		if err := netguard.CheckURL(ctx, u); err != nil {
+			return nil, err
+		}
+	}
 	req, err := d.newRequest(ctx, u)
 	if err != nil {
 		return nil, err
@@ -218,11 +223,11 @@ func (d *Direct) getBytes(ctx context.Context, u string) ([]byte, error) {
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
 // downloadHLS fetches a VOD playlist's segments through the SSRF-guarded
-// client (so segment URLs are validated too), decrypts AES-128 segments, and
+// client (so segment URLs are validated too), decrypts AES-128 segments in stream, and
 // remuxes to MP4 (falling back to MKV) with ffmpeg stream copy.
 func (d *Direct) downloadHLS(ctx context.Context, playlistURL, dest string) (string, error) {
 	text, finalURL, err := d.getText(ctx, playlistURL)
@@ -262,12 +267,15 @@ func (d *Direct) downloadHLS(ctx context.Context, playlistURL, dest string) (str
 	closeOut := func() error { return out.Close() }
 
 	if mp.InitURL != "" {
-		b, err := d.getBytes(ctx, mp.InitURL)
+		b, err := d.getBoundedBytes(ctx, mp.InitURL, 1<<20)
 		if err != nil {
 			_ = closeOut()
 			return "", fmt.Errorf("fetch init segment: %w", err)
 		}
-		_, _ = out.Write(b)
+		if _, err := out.Write(b); err != nil {
+			_ = closeOut()
+			return "", err
+		}
 	}
 
 	keys := map[string][]byte{}
@@ -277,14 +285,9 @@ func (d *Direct) downloadHLS(ctx context.Context, playlistURL, dest string) (str
 			_ = closeOut()
 			return "", err
 		}
-		data, err := d.fetchSegment(ctx, seg, keys)
-		if err != nil {
+		if err := d.streamSegment(ctx, seg, out, keys); err != nil {
 			_ = closeOut()
 			return "", fmt.Errorf("segment %d: %w", seg.Seq, err)
-		}
-		if _, err := out.Write(data); err != nil {
-			_ = closeOut()
-			return "", err
 		}
 		elapsed += seg.Duration
 		d.processed = int64(elapsed)
@@ -306,33 +309,66 @@ func (d *Direct) downloadHLS(ctx context.Context, playlistURL, dest string) (str
 	return res, nil
 }
 
-func (d *Direct) fetchSegment(ctx context.Context, seg segment, keys map[string][]byte) ([]byte, error) {
+func (d *Direct) streamSegment(ctx context.Context, seg segment, out *os.File, keys map[string][]byte) error {
 	var lastErr error
+	startOffset, err := out.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-time.After(time.Duration(attempt) * time.Second):
 			}
-		}
-		if !d.cfg.AllowPrivateURLs {
-			if err := netguard.CheckURL(ctx, seg.URL); err != nil {
-				return nil, err
+			if _, err := out.Seek(startOffset, io.SeekStart); err != nil {
+				return err
+			}
+			if err := out.Truncate(startOffset); err != nil {
+				return err
 			}
 		}
-		data, err := d.getBytes(ctx, seg.URL)
+
+		if !d.cfg.AllowPrivateURLs {
+			if err := netguard.CheckURL(ctx, seg.URL); err != nil {
+				return err
+			}
+		}
+
+		req, err := d.newRequest(ctx, seg.URL)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		if seg.Key == nil {
-			return data, nil
+		resp, err := d.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
 		}
+		if resp.StatusCode >= 400 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		}
+
+		if seg.Key == nil {
+			buf := make([]byte, 1<<20)
+			_, err = io.CopyBuffer(out, resp.Body, buf)
+			resp.Body.Close()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
+		}
+
 		k, ok := keys[seg.Key.URL]
 		if !ok {
-			if k, err = d.getBytes(ctx, seg.Key.URL); err != nil {
-				return nil, fmt.Errorf("fetch key: %w", err)
+			if k, err = d.getBoundedBytes(ctx, seg.Key.URL, 1<<20); err != nil {
+				resp.Body.Close()
+				return fmt.Errorf("fetch key: %w", err)
 			}
 			keys[seg.Key.URL] = k
 		}
@@ -341,27 +377,67 @@ func (d *Direct) fetchSegment(ctx context.Context, seg segment, keys map[string]
 			iv = make([]byte, 16)
 			binary.BigEndian.PutUint64(iv[8:], seg.Seq)
 		}
-		return decryptAES128(data, k, iv)
+		block, err := aes.NewCipher(k)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
+		mode := cipher.NewCBCDecrypter(block, iv)
+		err = streamDecryptCBC(resp.Body, out, mode)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
 	}
-	return nil, lastErr
+	return lastErr
 }
 
-func decryptAES128(data, key, iv []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(data)%aes.BlockSize != 0 {
-		return nil, errors.New("encrypted segment is not block aligned")
-	}
-	cipher.NewCBCDecrypter(block, iv).CryptBlocks(data, data)
-	if n := len(data); n > 0 {
-		pad := int(data[n-1])
-		if pad > 0 && pad <= aes.BlockSize && pad <= n {
-			data = data[:n-pad]
+func streamDecryptCBC(r io.Reader, w io.Writer, mode cipher.BlockMode) error {
+	chunk := make([]byte, 1<<20)
+	var pending []byte
+
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			pending = append(pending, chunk[:n]...)
+			if len(pending) > aes.BlockSize {
+				blocks := (len(pending) - aes.BlockSize) / aes.BlockSize * aes.BlockSize
+				if blocks > 0 {
+					mode.CryptBlocks(pending[:blocks], pending[:blocks])
+					if _, werr := w.Write(pending[:blocks]); werr != nil {
+						return werr
+					}
+					pending = append([]byte(nil), pending[blocks:]...)
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
 		}
 	}
-	return data, nil
+
+	if len(pending) == 0 {
+		return nil
+	}
+	if len(pending)%aes.BlockSize != 0 {
+		return errors.New("encrypted segment is not block aligned")
+	}
+	mode.CryptBlocks(pending, pending)
+	pad := int(pending[len(pending)-1])
+	if pad > 0 && pad <= aes.BlockSize && pad <= len(pending) {
+		pending = pending[:len(pending)-pad]
+	}
+	if len(pending) > 0 {
+		if _, err := w.Write(pending); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func remux(ctx context.Context, in, dest, format string) (string, error) {

@@ -3,7 +3,6 @@ package archive
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"context"
@@ -15,9 +14,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/burhanverse/tgdl/internal/fsutil"
 )
+
+type ExtractLimits struct {
+	Threads          int
+	MaxExtractBytes  int64
+	MaxExtractFiles  int
+	MinFreeDiskBytes int64
+}
+
+var DefaultExtractLimits = ExtractLimits{
+	Threads:          2,
+	MaxExtractBytes:  20 * 1024 * 1024 * 1024,
+	MaxExtractFiles:  200000,
+	MinFreeDiskBytes: 2 * 1024 * 1024 * 1024,
+}
 
 var archiveExts = map[string]bool{}
 
@@ -63,31 +78,103 @@ func which(names ...string) string {
 }
 
 func runTool(ctx context.Context, name string, args ...string) (string, int, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	bin, wArgs := WrapHeavy(name, args...)
+	cmd := exec.CommandContext(ctx, bin, wArgs...)
+	tw := NewTailWriter(64 * 1024)
+	cmd.Stdout, cmd.Stderr = tw, tw
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		return "", 0, ctx.Err()
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		return buf.String(), ee.ExitCode(), nil
+		return tw.String(), ee.ExitCode(), nil
 	}
-	return buf.String(), 0, err
+	return tw.String(), 0, err
 }
 
 // Extract extracts archivePath into dest. It returns ErrPasswordRequired when
 // the archive is encrypted and the password is missing or wrong. The
 // extraction order mirrors robustness: 7z (handles almost everything) →
 // unrar → unzip → pure-Go zip/tar fallbacks.
-func Extract(ctx context.Context, archivePath, dest, password string) error {
+func Extract(ctx context.Context, archivePath, dest, password string, limits ...ExtractLimits) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	if _, err := os.Stat(archivePath); err != nil {
+	ast, err := os.Stat(archivePath)
+	if err != nil {
 		return err
 	}
+
+	lim := DefaultExtractLimits
+	if len(limits) > 0 {
+		if limits[0].Threads > 0 {
+			lim.Threads = limits[0].Threads
+		}
+		if limits[0].MaxExtractBytes > 0 {
+			lim.MaxExtractBytes = limits[0].MaxExtractBytes
+		}
+		if limits[0].MaxExtractFiles > 0 {
+			lim.MaxExtractFiles = limits[0].MaxExtractFiles
+		}
+		if limits[0].MinFreeDiskBytes > 0 {
+			lim.MinFreeDiskBytes = limits[0].MinFreeDiskBytes
+		}
+	}
+
+	estSize := ast.Size() * 2
+	if free, err := fsutil.FreeDiskSpace(dest); err == nil {
+		if int64(free) < lim.MinFreeDiskBytes+estSize {
+			return fmt.Errorf("insufficient disk space for extraction: free %d bytes is below required %d bytes", free, lim.MinFreeDiskBytes+estSize)
+		}
+	}
+
+	extractCtx, cancelExtract := context.WithCancel(ctx)
+	defer cancelExtract()
+	var guardErr error
+	var guardMu sync.Mutex
+	stopGuard := make(chan struct{})
+	defer close(stopGuard)
+
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopGuard:
+				return
+			case <-extractCtx.Done():
+				return
+			case <-ticker.C:
+				curSize := fsutil.DirSize(dest)
+				if curSize > lim.MaxExtractBytes {
+					guardMu.Lock()
+					guardErr = fmt.Errorf("extraction exceeded maximum size limit (%d bytes)", lim.MaxExtractBytes)
+					guardMu.Unlock()
+					cancelExtract()
+					_ = os.RemoveAll(dest)
+					return
+				}
+				if free, err := fsutil.FreeDiskSpace(dest); err == nil {
+					if int64(free) < lim.MinFreeDiskBytes {
+						guardMu.Lock()
+						guardErr = fmt.Errorf("disk space exhausted during extraction: free %d bytes is below threshold %d bytes", free, lim.MinFreeDiskBytes)
+						guardMu.Unlock()
+						cancelExtract()
+						_ = os.RemoveAll(dest)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	checkGuard := func() error {
+		guardMu.Lock()
+		defer guardMu.Unlock()
+		return guardErr
+	}
+
 	dir := filepath.Dir(archivePath)
 	if ren := NormalizeSplitNames(dir); len(ren) > 0 {
 		if np, ok := ren[archivePath]; ok {
@@ -115,8 +202,16 @@ func Extract(ctx context.Context, archivePath, dest, password string) error {
 	}
 	sawPassword := false
 
+	threads := lim.Threads
+	if threads <= 0 {
+		threads = 2
+	}
+
 	if sz := which("7z", "7zz", "7za"); sz != "" {
-		out, code, err := runTool(ctx, sz, "x", "-y", "-aoa", "-o"+dest, pw, archivePath)
+		out, code, err := runTool(extractCtx, sz, "x", "-y", "-aoa", fmt.Sprintf("-mmt=%d", threads), "-bso0", "-bsp0", "-bb0", "-o"+dest, pw, archivePath)
+		if gerr := checkGuard(); gerr != nil {
+			return gerr
+		}
 		if err == nil && code == 0 {
 			return nil
 		}
@@ -131,7 +226,10 @@ func Extract(ctx context.Context, archivePath, dest, password string) error {
 	if ext == ".rar" || strings.HasSuffix(base, ".rar") || SplitArchiveInfo(base) != nil && strings.Contains(base, ".r") {
 		if ur := which("unrar"); ur != "" {
 			args := []string{"x", "-y", pw, "-kb", "-or", "--", archivePath, dest + string(os.PathSeparator)}
-			out, code, err := runTool(ctx, ur, args...)
+			out, code, err := runTool(extractCtx, ur, args...)
+			if gerr := checkGuard(); gerr != nil {
+				return gerr
+			}
 			if err == nil && code == 0 {
 				return nil
 			}
@@ -150,7 +248,10 @@ func Extract(ctx context.Context, archivePath, dest, password string) error {
 				args = append(args, "-P", password)
 			}
 			args = append(args, archivePath, "-d", dest)
-			out, code, err := runTool(ctx, uz, args...)
+			out, code, err := runTool(extractCtx, uz, args...)
+			if gerr := checkGuard(); gerr != nil {
+				return gerr
+			}
 			if err == nil && code == 0 {
 				return nil
 			}

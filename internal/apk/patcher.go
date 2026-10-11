@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burhanverse/tgdl/internal/archive"
 	"github.com/burhanverse/tgdl/internal/config"
 )
 
@@ -143,13 +144,13 @@ func (p *Patcher) ensureTools(ctx context.Context) error {
 func run(ctx context.Context, dir string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	tw := archive.NewTailWriter(64 * 1024)
+	cmd.Stdout, cmd.Stderr = tw, tw
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return buf.String(), ctx.Err()
+		return tw.String(), ctx.Err()
 	}
-	return buf.String(), err
+	return tw.String(), err
 }
 
 func findExec(names ...string) string {
@@ -273,12 +274,20 @@ func (p *Patcher) alignAndSign(ctx context.Context, java, unaligned, final strin
 		}
 	}
 	if !nonEmpty(final) {
-		data, err := os.ReadFile(unaligned)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(final, data, 0o644); err != nil {
-			return err
+		if err := os.Rename(unaligned, final); err != nil {
+			in, err := os.Open(unaligned)
+			if err != nil {
+				return err
+			}
+			defer in.Close()
+			out, err := os.Create(final)
+			if err != nil {
+				return err
+			}
+			defer out.Close()
+			if _, err := io.Copy(out, in); err != nil {
+				return err
+			}
 		}
 	}
 	if ks == nil || ks.Path == "" {

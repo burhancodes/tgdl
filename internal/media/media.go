@@ -3,7 +3,6 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,13 +17,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/burhanverse/tgdl/internal/archive"
 )
 
 var (
 	VideoExt = set(".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".wmv", ".3gp", ".mpeg", ".mpg", ".m4v", ".ts", ".tts", ".f4v")
 	// ConversionExt are video containers that Telegram players handle poorly;
-	// they are remuxed to MKV before upload.
-	ConversionExt      = set(".ts", ".f4v", ".tts", ".flv", ".avi", ".wmv", ".asf", ".m4v", ".webm", ".mov", ".3gp", ".mpeg", ".mpg", ".vob")
+	// they are remuxed to MKV before upload. (.mov, .m4v, .webm play natively in Telegram).
+	ConversionExt      = set(".ts", ".flv", ".avi", ".wmv", ".mpeg", ".mpg", ".vob", ".3gp", ".f4v", ".tts", ".asf")
 	AudioExt           = set(".mp3", ".flac", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".wma", ".alac", ".aiff")
 	AudioConversionExt = set(".wav", ".flac", ".ogg", ".opus", ".aiff", ".aac")
 	ImageExt           = set(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".heic", ".heif", ".ico")
@@ -50,16 +51,17 @@ func Available() bool {
 }
 
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	bin, wArgs := archive.WrapHeavy(name, args...)
+	cmd := exec.CommandContext(ctx, bin, wArgs...)
+	tw := archive.NewTailWriter(64 * 1024)
+	cmd.Stdout, cmd.Stderr = tw, tw
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return out.Bytes(), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(tailStr(errb.String(), 400)))
+		return tw.Bytes(), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(tailStr(tw.String(), 400)))
 	}
-	return out.Bytes(), nil
+	return tw.Bytes(), nil
 }
 
 func tailStr(s string, n int) string {
@@ -196,8 +198,17 @@ func ConvertImageToPNG(ctx context.Context, in, out string) bool {
 	return err == nil && st.Size() > 0
 }
 
+var TempDir = ""
+
+// SetTempDir sets the temporary directory used for thumbnails and screenshots.
+func SetTempDir(dir string) { TempDir = dir }
+
 func tempJPG(stem string) (string, error) {
-	f, err := os.CreateTemp("", stem+"_*.jpg")
+	dir := TempDir
+	if dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	f, err := os.CreateTemp(dir, stem+"_*.jpg")
 	if err != nil {
 		return "", err
 	}

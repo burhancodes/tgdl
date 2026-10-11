@@ -30,16 +30,21 @@ var (
 
 // tgUploader sends files to Telegram with pacing, retries and format fallbacks.
 type tgUploader struct {
-	tg    tg.Client
-	lim   *pacing.TelegramLimiter
-	limit int64
+	tg            tg.Client
+	lim           *pacing.TelegramLimiter
+	limit         int64
+	albumMaxBytes int64
 
 	mu         sync.Mutex
 	multiplier float64
 }
 
-func newTGUploader(c tg.Client, lim *pacing.TelegramLimiter, limit int64) *tgUploader {
-	return &tgUploader{tg: c, lim: lim, limit: limit, multiplier: 1}
+func newTGUploader(c tg.Client, lim *pacing.TelegramLimiter, limit int64, albumMaxBytes ...int64) *tgUploader {
+	ab := int64(64 * 1024 * 1024)
+	if len(albumMaxBytes) > 0 && albumMaxBytes[0] > 0 {
+		ab = albumMaxBytes[0]
+	}
+	return &tgUploader{tg: c, lim: lim, limit: limit, albumMaxBytes: ab, multiplier: 1}
 }
 
 func (u *tgUploader) bump(delta float64) {
@@ -109,6 +114,10 @@ func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDo
 		}
 		if ctx.Err() != nil {
 			return asDoc, ctx.Err()
+		}
+		if errors.Is(err, tg.ErrAmbiguousUpload) {
+			slog.Warn("upload failed after body was fully sent; not retrying to avoid duplicates", "file", filepath.Base(path), "err", err)
+			return asDoc, err
 		}
 		lastErr = err
 		if _, bad := tg.IsBadRequest(err); bad {
@@ -232,23 +241,93 @@ func SplitGroupKey(name string) (string, bool) {
 	return m[1], true
 }
 
-// UploadGroup sends split parts as albums of up to 10, falling back to
-// single-file uploads for a batch that fails.
-func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []string, asDoc bool, progress tg.ProgressFunc) (bool, error) {
+// PlanAlbumBatches splits a list of file sizes into batches for upload.
+// An album batch requires 2 to 10 items whose combined size does NOT exceed maxTotalBytes,
+// with every file individually <= maxTotalBytes.
+// Any file that cannot form a valid album batch (e.g. size > maxTotalBytes,
+// or only 1 file remaining) is returned as a single-item batch (len == 1).
+func PlanAlbumBatches(sizes []int64, maxTotalBytes int64) [][]int {
+	var batches [][]int
+	n := len(sizes)
+	i := 0
+	for i < n {
+		if sizes[i] > maxTotalBytes {
+			batches = append(batches, []int{i})
+			i++
+			continue
+		}
+
+		var currentSize int64
+		j := i
+		for j < n && (j-i) < 10 {
+			if sizes[j] > maxTotalBytes {
+				break
+			}
+			if currentSize+sizes[j] > maxTotalBytes {
+				break
+			}
+			currentSize += sizes[j]
+			j++
+		}
+
+		count := j - i
+		if count >= 2 {
+			batch := make([]int, count)
+			for k := 0; k < count; k++ {
+				batch[k] = i + k
+			}
+			batches = append(batches, batch)
+			i = j
+		} else {
+			batches = append(batches, []int{i})
+			i++
+		}
+	}
+	return batches
+}
+
+// UploadGroup sends files as albums when the combined size is small (<= albumMaxBytes)
+// and each file is individually small, falling back to single-file uploads otherwise.
+// onUploaded is called for each file that succeeds.
+func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []string, asDoc bool, progress tg.ProgressFunc, onUploaded ...func(path string)) (bool, error) {
+	var notifySuccess func(string)
+	if len(onUploaded) > 0 && onUploaded[0] != nil {
+		notifySuccess = onUploaded[0]
+	}
+
 	sort.SliceStable(files, func(i, j int) bool { return fsutil.NaturalPathLess(files[i], files[j]) })
-	for i := 0; i < len(files); i += 10 {
-		batch := files[i:min(i+10, len(files))]
-		if len(batch) == 1 {
+
+	sizes := make([]int64, len(files))
+	for i, f := range files {
+		st, err := os.Stat(f)
+		if err != nil {
+			return asDoc, err
+		}
+		sizes[i] = st.Size()
+	}
+
+	plan := PlanAlbumBatches(sizes, u.albumMaxBytes)
+	for _, batchIndices := range plan {
+		if len(batchIndices) == 1 {
+			f := files[batchIndices[0]]
 			var err error
-			if asDoc, err = u.Upload(ctx, chatID, batch[0], asDoc, progress); err != nil {
+			if asDoc, err = u.Upload(ctx, chatID, f, asDoc, progress); err != nil {
 				return asDoc, err
+			}
+			if notifySuccess != nil {
+				notifySuccess(f)
 			}
 			continue
 		}
-		items := make([]tg.GroupItem, len(batch))
-		for k, f := range batch {
+
+		batchFiles := make([]string, len(batchIndices))
+		items := make([]tg.GroupItem, len(batchIndices))
+		for k, idx := range batchIndices {
+			f := files[idx]
+			batchFiles[k] = f
 			items[k] = tg.GroupItem{Path: f, Caption: caption(f), Video: media.VideoExt[media.Ext(f)]}
 		}
+
 		if err := u.lim.AcquireUpload(ctx, chatID); err != nil {
 			return asDoc, err
 		}
@@ -261,11 +340,24 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 			err = u.tg.UploadGroup(ctx, chatID, items)
 		}
 		if err != nil {
+			if errors.Is(err, tg.ErrAmbiguousUpload) {
+				slog.Warn("album upload failed after body was fully sent; not falling back to single uploads", "err", err)
+				return asDoc, err
+			}
 			slog.Warn("album upload failed; falling back to single uploads", "err", err)
-			for _, f := range batch {
+			for _, f := range batchFiles {
 				var e error
 				if asDoc, e = u.Upload(ctx, chatID, f, asDoc, progress); e != nil {
 					return asDoc, e
+				}
+				if notifySuccess != nil {
+					notifySuccess(f)
+				}
+			}
+		} else {
+			if notifySuccess != nil {
+				for _, f := range batchFiles {
+					notifySuccess(f)
 				}
 			}
 		}

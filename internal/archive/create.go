@@ -11,13 +11,24 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/burhanverse/tgdl/internal/fsutil"
 )
 
 // Create archives dir into out ("zip" or "7z"). It prefers 7z and falls back
 // to a native zip writer for the zip format.
-func Create(ctx context.Context, dir, out, format string) error {
+func Create(ctx context.Context, dir, out, format string, opts ...FolderOpts) error {
+	threads := 2
+	zipLevel := 1
+	if len(opts) > 0 {
+		if opts[0].Threads > 0 {
+			threads = opts[0].Threads
+		}
+		if opts[0].ZipLevel > 0 {
+			zipLevel = opts[0].ZipLevel
+		}
+	}
 	format = strings.TrimPrefix(strings.ToLower(format), "-")
 	if format != "zip" && format != "7z" {
 		format = "zip"
@@ -30,11 +41,16 @@ func Create(ctx context.Context, dir, out, format string) error {
 	}
 	if sz := which("7z", "7zz", "7za"); sz != "" {
 		cmd := "-tzip"
+		compArgs := []string{fmt.Sprintf("-mx=%d", zipLevel)}
 		if format == "7z" {
 			cmd = "-t7z"
+			compArgs = []string{"-mx=3", "-md=16m", "-ms=off"}
 		}
 		abs, _ := filepath.Abs(out)
-		c := execIn(ctx, dir, sz, "a", cmd, "-y", abs, ".")
+		args := []string{"a", cmd, fmt.Sprintf("-mmt=%d", threads), "-bso0", "-bsp0", "-bb0", "-y"}
+		args = append(args, compArgs...)
+		args = append(args, abs, ".")
+		c := execIn(ctx, dir, sz, args...)
 		if err := c.Run(); err == nil {
 			if st, err := os.Stat(out); err == nil && st.Size() > 0 {
 				return nil
@@ -94,10 +110,14 @@ type Link struct{ Name, URL string }
 
 // FolderOpts tunes ArchiveFolder.
 type FolderOpts struct {
-	Format      string
-	MaxPartMB   int
-	MirrorPD    Uploader // nil disables mirroring
-	OnMirror    func(Link)
+	Format     string
+	MaxPartMB  int
+	MirrorPD   Uploader // nil disables mirroring
+	OnMirror   func(Link)
+	TempDir    string
+	MirrorDone *sync.WaitGroup
+	Threads    int
+	ZipLevel   int
 }
 
 const pixeldrainMax = 10 << 30
@@ -120,18 +140,56 @@ func ArchiveFolder(ctx context.Context, folder string, o FolderOpts) ([]string, 
 	if o.MaxPartMB <= 0 {
 		o.MaxPartMB = 1900
 	}
+	threads := o.Threads
+	if threads <= 0 {
+		threads = 2
+	}
+	zipLevel := o.ZipLevel
+	if zipLevel <= 0 {
+		zipLevel = 1
+	}
+
 	parent, name := filepath.Dir(folder), filepath.Base(folder)
+	limit := int64(o.MaxPartMB) << 20
+
+	// Single-pass volume creation: when expected archive size exceeds MaxPartMB,
+	// create volumes directly from folder.
+	folderSize := fsutil.DirSize(folder)
+	if folderSize > limit {
+		if sz := which("7z", "7zz", "7za"); sz != "" {
+			flag := "-tzip"
+			compArgs := []string{fmt.Sprintf("-mx=%d", zipLevel)}
+			if format == "7z" {
+				flag = "-t7z"
+				compArgs = []string{"-mx=3", "-md=16m", "-ms=off"}
+			}
+			prefix := filepath.Join(parent, name+"_parts."+format)
+			args := []string{"a", flag, fmt.Sprintf("-v%dm", o.MaxPartMB), fmt.Sprintf("-mmt=%d", threads), "-bso0", "-bsp0", "-bb0", "-y"}
+			args = append(args, compArgs...)
+			args = append(args, prefix, ".")
+			if err := execIn(ctx, folder, sz, args...).Run(); err == nil {
+				parts := globSorted(parent, filepath.Base(prefix))
+				if len(parts) > 0 {
+					_ = os.RemoveAll(folder)
+					if o.MirrorPD != nil {
+						mirrorInBackground(ctx, parts, parent, name, o)
+					}
+					return parts, nil
+				}
+			}
+		}
+	}
+
 	archive := filepath.Join(parent, name+"."+format)
-	if err := Create(ctx, folder, archive, format); err != nil {
+	if err := Create(ctx, folder, archive, format, o); err != nil {
 		return nil, fmt.Errorf("archive %s: %w", name, err)
 	}
 	ast, _ := os.Stat(archive)
-	limit := int64(o.MaxPartMB) << 20
 	split := ast.Size() > limit
 
 	var parts []string
 	if split {
-		parts = splitVolumes(ctx, archive, parent, name, format, o.MaxPartMB)
+		parts = splitVolumes(ctx, archive, parent, name, format, o.MaxPartMB, threads)
 	}
 	if len(parts) == 0 {
 		parts = []string{archive}
@@ -147,14 +205,19 @@ func ArchiveFolder(ctx context.Context, folder string, o FolderOpts) ([]string, 
 	return parts, nil
 }
 
-func splitVolumes(ctx context.Context, archive, parent, name, format string, mb int) []string {
+func splitVolumes(ctx context.Context, archive, parent, name, format string, mb int, threads int) []string {
+	if threads <= 0 {
+		threads = 2
+	}
 	if sz := which("7z", "7zz", "7za"); sz != "" {
 		flag := "-tzip"
 		if format == "7z" {
 			flag = "-t7z"
 		}
 		prefix := filepath.Join(parent, name+"_parts."+format)
-		if err := execIn(ctx, parent, sz, "a", flag, fmt.Sprintf("-v%dm", mb), "-y", prefix, archive).Run(); err == nil {
+		// Second pass uses store mode (-mx=0), never recompresses.
+		args := []string{"a", flag, "-mx=0", fmt.Sprintf("-v%dm", mb), fmt.Sprintf("-mmt=%d", threads), "-bso0", "-bsp0", "-bb0", "-y", prefix, archive}
+		if err := execIn(ctx, parent, sz, args...).Run(); err == nil {
 			return globSorted(parent, filepath.Base(prefix))
 		}
 	}
@@ -180,10 +243,13 @@ func globSorted(dir, prefix string) []string {
 	return out
 }
 
-// mirrorInBackground copies the parts into a temporary directory (so cleanup of
-// the originals cannot race) and uploads them asynchronously.
+// mirrorInBackground links the parts into a temporary directory outside st.Dest
+// (falling back to copy if Link fails) and uploads them asynchronously without being cancelled by parent.
 func mirrorInBackground(ctx context.Context, parts []string, parent, name string, o FolderOpts) {
-	tmp := filepath.Join(parent, name+"_pd_temp")
+	tmp := o.TempDir
+	if tmp == "" {
+		tmp = filepath.Join(parent, name+"_pd_temp")
+	}
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		slog.Error("mirror temp dir failed", "err", err)
 		return
@@ -191,13 +257,21 @@ func mirrorInBackground(ctx context.Context, parts []string, parent, name string
 	var copies []string
 	for _, p := range parts {
 		dst := filepath.Join(tmp, filepath.Base(p))
-		if err := copyFile(p, dst); err != nil {
-			slog.Error("mirror copy failed", "file", p, "err", err)
-			continue
+		if err := os.Link(p, dst); err != nil {
+			if err := copyFile(p, dst); err != nil {
+				slog.Error("mirror copy failed", "file", p, "err", err)
+				continue
+			}
 		}
 		copies = append(copies, dst)
 	}
-	go func() {
+	if o.MirrorDone != nil {
+		o.MirrorDone.Add(1)
+	}
+	go func(ctx context.Context) {
+		if o.MirrorDone != nil {
+			defer o.MirrorDone.Done()
+		}
 		defer os.RemoveAll(tmp)
 		for _, c := range copies {
 			url, err := o.MirrorPD(ctx, c)
@@ -209,7 +283,7 @@ func mirrorInBackground(ctx context.Context, parts []string, parent, name string
 				o.OnMirror(Link{Name: filepath.Base(c), URL: url})
 			}
 		}
-	}()
+	}(context.WithoutCancel(ctx))
 }
 
 func copyFile(src, dst string) error {

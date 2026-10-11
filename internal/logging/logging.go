@@ -2,10 +2,12 @@
 package logging
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/burhanverse/tgdl/internal/config"
 )
@@ -98,4 +100,57 @@ func Setup(cfg *config.Config) func() {
 	}
 	slog.SetDefault(slog.New(h))
 	return closer
+}
+
+// TruncateLogFile checks the file at path and, if it exceeds maxSize, truncates it
+// to keep at most the last 1 MiB.
+func TruncateLogFile(path string, maxSize int64) {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() <= maxSize {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0o640)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	keepSize := int64(1 << 20)
+	if keepSize > maxSize {
+		keepSize = maxSize / 2
+	}
+	if st.Size() > keepSize {
+		buf := make([]byte, keepSize)
+		_, _ = f.Seek(-keepSize, io.SeekEnd)
+		n, _ := io.ReadFull(f, buf)
+		_ = f.Truncate(0)
+		_, _ = f.Seek(0, io.SeekStart)
+		if n > 0 {
+			_, _ = f.Write(buf[:n])
+		}
+	} else {
+		_ = f.Truncate(0)
+	}
+}
+
+// StartLogTruncator runs TruncateLogFile on startup and every hour in a background goroutine.
+func StartLogTruncator(ctx context.Context, logDir string, maxSize int64, filenames ...string) {
+	check := func() {
+		for _, fn := range filenames {
+			TruncateLogFile(filepath.Join(logDir, fn), maxSize)
+		}
+	}
+	check()
+	go func() {
+		t := time.NewTicker(1 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				check()
+			}
+		}
+	}()
 }

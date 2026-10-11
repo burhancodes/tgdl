@@ -16,6 +16,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/archive"
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/fsutil"
+	"github.com/burhanverse/tgdl/internal/media"
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
@@ -30,8 +31,9 @@ type Manager struct {
 	lim     *pacing.TelegramLimiter
 	up      *tgUploader
 
-	dlSem *semaphore.Weighted
-	ulSem *semaphore.Weighted
+	dlSem    *semaphore.Weighted
+	ulSem    *semaphore.Weighted
+	heavySem *semaphore.Weighted
 
 	mu     sync.Mutex
 	states map[string]*State
@@ -42,12 +44,16 @@ type Manager struct {
 
 // NewManager wires a manager. lim is shared with the Telegram-facing code.
 func NewManager(d *Deps, lim *pacing.TelegramLimiter) *Manager {
+	media.SetTempDir(filepath.Join(d.Cfg.DataDir, "tmp"))
+	hs := semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentHeavy))
+	d.HeavySem = hs
 	return &Manager{
 		d: d, sources: DefaultSources(d), lim: lim,
-		up:    newTGUploader(d.TG, lim, d.Cfg.UploadLimit()),
-		dlSem: semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentDL)),
-		ulSem: semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentUL)),
-		states: map[string]*State{},
+		up:       newTGUploader(d.TG, lim, d.Cfg.UploadLimit(), d.Cfg.AlbumMaxTotalBytes),
+		dlSem:    semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentDL)),
+		ulSem:    semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentUL)),
+		heavySem: hs,
+		states:   map[string]*State{},
 	}
 }
 
@@ -59,11 +65,27 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("load resumable jobs: %w", err)
 	}
 	m.cleanupOrphans(pending)
+	m.cleanupOldTempFiles()
 	for _, j := range pending {
 		slog.Info("resuming job", "job", j.ID, "status", j.Status)
 		m.Add(j.ID)
 	}
 	go m.lim.RunSweeper(m.root, m.activeChats)
+	go func() {
+		t := time.NewTicker(30 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-m.root.Done():
+				return
+			case <-t.C:
+				if p, err := m.d.Store.ResumableJobs(m.root); err == nil {
+					m.cleanupOrphans(p)
+				}
+				m.cleanupOldTempFiles()
+			}
+		}
+	}()
 	return nil
 }
 
@@ -88,14 +110,78 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 	}
 	live := map[string]bool{}
 	for _, j := range keep {
-		live[j.DownloadDir()], live[j.DownloadDir()+"_extract"] = true, true
+		base := j.DownloadDir()
+		live[base] = true
+		live[base+"_extract"] = true
+		live[base+"_patch_work"] = true
+		live[base+"_pd_temp"] = true
 	}
+	m.mu.Lock()
+	for _, s := range m.states {
+		base := s.Job().DownloadDir()
+		live[base] = true
+		live[base+"_extract"] = true
+		live[base+"_patch_work"] = true
+		live[base+"_pd_temp"] = true
+	}
+	m.mu.Unlock()
+
+	now := time.Now()
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "job_") && !live[e.Name()] {
-			slog.Info("removing orphaned directory", "dir", e.Name())
-			_ = os.RemoveAll(filepath.Join(m.d.Cfg.DownloadsDir(), e.Name()))
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		isTarget := strings.HasPrefix(name, "job_") ||
+			strings.HasSuffix(name, "_extract") ||
+			strings.HasSuffix(name, "_patch_work") ||
+			strings.HasPrefix(name, "tmp_up_") ||
+			strings.HasPrefix(name, "tmp_conf_") ||
+			strings.HasSuffix(name, "_pd_temp")
+
+		if !isTarget || live[name] {
+			continue
+		}
+
+		if strings.HasPrefix(name, "tmp_up_") || strings.HasPrefix(name, "tmp_conf_") {
+			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < 10*time.Minute {
+				continue
+			}
+		}
+
+		slog.Info("removing orphaned directory", "dir", name)
+		_ = os.RemoveAll(filepath.Join(m.d.Cfg.DownloadsDir(), name))
+	}
+}
+
+func (m *Manager) cleanupOldTempFiles() {
+	now := time.Now()
+	cleanDir := func(dir string, match func(string) bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if !match(e.Name()) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if now.Sub(info.ModTime()) > time.Hour {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
 		}
 	}
+
+	cleanDir(filepath.Join(m.d.Cfg.DataDir, "tmp"), func(name string) bool { return true })
+	cleanDir("/tmp", func(name string) bool {
+		return strings.HasSuffix(name, ".jpg") && (strings.Contains(name, "thumb") || strings.Contains(name, "_shot_"))
+	})
 }
 
 func (m *Manager) activeChats() map[int64]bool {
@@ -204,6 +290,9 @@ func (m *Manager) run(id string) {
 	}
 	dest := filepath.Join(m.d.Cfg.DownloadsDir(), job.DownloadDir())
 	st := newState(job, dest, dest+"_extract", m.root)
+	if m.d.Cfg.HasMaxTotalDownloads {
+		st.SetMaxBytes(m.d.Cfg.MaxTotalDownloadsB)
+	}
 
 	m.mu.Lock()
 	if _, exists := m.states[id]; exists {
@@ -376,6 +465,17 @@ func (m *Manager) downloadStage(st *State) {
 	defer m.dlSem.Release(1)
 	m.setStatus(st, store.StatusDownloading)
 
+	// Check free disk space before starting
+	if free, err := fsutil.FreeDiskSpace(m.d.Cfg.DownloadsDir()); err == nil {
+		if int64(free) < m.d.Cfg.MinFreeDiskBytes {
+			errMsg := fmt.Sprintf("insufficient free disk space before download: %s free, %s required",
+				status.Size(float64(free)), status.Size(float64(m.d.Cfg.MinFreeDiskBytes)))
+			st.setFatal(errMsg)
+			st.setResult(dl.Result{ErrorTail: errMsg})
+			return
+		}
+	}
+
 	if err := os.MkdirAll(st.Dest, 0o755); err != nil {
 		st.setResult(dl.Result{ErrorTail: err.Error()})
 		return
@@ -385,6 +485,31 @@ func (m *Manager) downloadStage(st *State) {
 	src := pickSource(m.sources, req)
 	slog.Info("starting download", "job", job.ID, "source", src.Name())
 
+	// Every 5s during download, check free disk space
+	diskCtx, cancelDisk := context.WithCancel(st.ctx)
+	defer cancelDisk()
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-diskCtx.Done():
+				return
+			case <-t.C:
+				if free, err := fsutil.FreeDiskSpace(m.d.Cfg.DownloadsDir()); err == nil {
+					if int64(free) < m.d.Cfg.MinFreeDiskBytes {
+						errMsg := fmt.Sprintf("free disk space dropped below minimum limit (%s < %s)",
+							status.Size(float64(free)), status.Size(float64(m.d.Cfg.MinFreeDiskBytes)))
+						st.setFatal(errMsg)
+						st.cancel()
+						st.kill()
+						return
+					}
+				}
+			}
+		}
+	}()
+
 	stopMon := func() {}
 	if diskMonitored(src) {
 		ctx, cancel := context.WithCancel(st.ctx)
@@ -393,6 +518,7 @@ func (m *Manager) downloadStage(st *State) {
 	}
 	res := src.Fetch(st.ctx, req)
 	stopMon()
+	cancelDisk()
 	if st.ctx.Err() != nil {
 		res = dl.Result{ErrorTail: "cancelled"}
 		st.setResult(res)
@@ -420,19 +546,72 @@ func (m *Manager) downloadStage(st *State) {
 }
 
 func (m *Manager) monitorDisk(ctx context.Context, st *State) {
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
+	interval := 2 * time.Second
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			files := fsutil.ListUploadable(st.Dest)
-			cur := ""
-			if len(files) > 0 {
-				cur = filepath.Base(files[len(files)-1])
+		case <-timer.C:
+			var totalSize int64
+			var fileCount int
+			var newestFile string
+			var newestTime time.Time
+
+			_ = filepath.WalkDir(st.Dest, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				if d.IsDir() {
+					if fsutil.ShouldIgnoreName(d.Name()) && path != st.Dest {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if fsutil.ShouldIgnoreName(d.Name()) {
+					return nil
+				}
+				info, err := d.Info()
+				if err != nil {
+					return nil
+				}
+				sz := info.Size()
+				if sz == 0 {
+					return nil
+				}
+				totalSize += sz
+				fileCount++
+				mt := info.ModTime()
+				if mt.After(newestTime) {
+					newestTime = mt
+					newestFile = d.Name()
+				}
+				return nil
+			})
+
+			st.observeDisk(totalSize, newestFile)
+
+			if free, err := fsutil.FreeDiskSpace(m.d.Cfg.DownloadsDir()); err == nil && int64(free) < m.d.Cfg.MinFreeDiskBytes {
+				errMsg := fmt.Sprintf("free disk space dropped below minimum limit (%s < %s)",
+					status.Size(float64(free)), status.Size(float64(m.d.Cfg.MinFreeDiskBytes)))
+				st.setFatal(errMsg)
+				st.cancel()
+				st.kill()
+				return
 			}
-			st.observeDisk(fsutil.DirSize(st.Dest), cur)
+
+			// Adaptive interval: 2s when < 500 files, up to 10s when > 5000 files
+			if fileCount < 500 {
+				interval = 2 * time.Second
+			} else if fileCount >= 5000 {
+				interval = 10 * time.Second
+			} else {
+				fraction := float64(fileCount-500) / 4500.0
+				interval = 2*time.Second + time.Duration(fraction*float64(8*time.Second))
+			}
+			timer.Reset(interval)
 		}
 	}
 }
@@ -449,8 +628,23 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 		uid := args.UserIDInt()
 		mirror = func(ctx context.Context, p string) (string, error) { return m.d.Hosts.Pixeldrain(ctx, p, uid, nil) }
 	}
-	opts := archive.FolderOpts{Format: args.ArchiveFormat, MirrorPD: mirror,
-		OnMirror: func(l archive.Link) { st.addPDLink(l.Name, l.URL) }}
+	tempDir := filepath.Join(m.d.Cfg.DownloadsDir(), st.Job().ID+"_pd_temp")
+	opts := archive.FolderOpts{
+		Format:     args.ArchiveFormat,
+		MirrorPD:   mirror,
+		OnMirror:   func(l archive.Link) { st.addPDLink(l.Name, l.URL) },
+		MirrorDone: &st.mirrorWG,
+		TempDir:    tempDir,
+		Threads:    m.d.Cfg.ArchiveThreads,
+		ZipLevel:   m.d.Cfg.ArchiveZipLevel,
+	}
+
+	if m.heavySem != nil {
+		if err := m.heavySem.Acquire(st.ctx, 1); err != nil {
+			return err
+		}
+		defer m.heavySem.Release(1)
+	}
 
 	var loose []string
 	for _, e := range entries {
@@ -483,9 +677,14 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 func (m *Manager) finalize(st *State) {
 	job := st.Job()
 	ctx := context.Background()
+
+	// Wait for background Pixeldrain mirroring if any
+	st.mirrorWG.Wait()
+
 	defer func() {
 		_ = os.RemoveAll(st.Dest)
 		_ = os.RemoveAll(st.Extract)
+		_ = os.RemoveAll(filepath.Join(m.d.Cfg.DownloadsDir(), job.ID+"_pd_temp"))
 	}()
 
 	sent, skipped := st.counts()

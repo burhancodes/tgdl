@@ -57,6 +57,7 @@ func (m *Manager) uploadStage(st *State) {
 	}
 
 	track := map[string]seen{}
+	pollInterval := 1500 * time.Millisecond
 	for {
 		if st.ctx.Err() != nil {
 			return
@@ -67,11 +68,15 @@ func (m *Manager) uploadStage(st *State) {
 			if done {
 				return
 			}
-			if err := pacing.Sleep(st.ctx, 1500*time.Millisecond); err != nil {
+			if err := pacing.Sleep(st.ctx, pollInterval); err != nil {
 				return
+			}
+			if pollInterval < 10*time.Second {
+				pollInterval = min(10*time.Second, pollInterval+1*time.Second)
 			}
 			continue
 		}
+		pollInterval = 1500 * time.Millisecond
 		if groups := groupSplitParts(st, files); len(groups) > 0 {
 			for _, g := range groups {
 				m.uploadSplitGroup(st, g)
@@ -91,23 +96,20 @@ func (m *Manager) uploadStage(st *State) {
 // have stopped growing.
 func readyFiles(st *State, track map[string]seen, done bool) []string {
 	var out []string
-	for _, f := range fsutil.ListUploadable(st.Dest) {
+	for _, fi := range fsutil.ListUploadableWithInfo(st.Dest) {
+		f := fi.Path
 		rel, _ := filepath.Rel(st.Dest, f)
 		if !st.isPending(rel) {
-			continue
-		}
-		info, err := os.Stat(f)
-		if err != nil {
 			continue
 		}
 		if !done {
 			prev, ok := track[f]
 			now := time.Now()
-			if !ok || prev.size != info.Size() {
-				track[f] = seen{info.Size(), now}
+			if !ok || prev.size != fi.Size {
+				track[f] = seen{fi.Size, now}
 				continue
 			}
-			if now.Sub(prev.at) < stableFor || now.Sub(info.ModTime()) < stableFor {
+			if now.Sub(prev.at) < stableFor || now.Sub(fi.ModTime) < stableFor {
 				continue
 			}
 		}
@@ -154,17 +156,25 @@ func (m *Manager) uploadSplitGroup(st *State, files []string) {
 		rel, _ := filepath.Rel(st.Dest, f)
 		st.beginUpload(rel, filepath.Base(f))
 	}
-	asDoc, err := m.up.UploadGroup(st.ctx, chat, files, st.asDocFlag(), st.UploadProgress)
+	onUp := func(f string) {
+		rel, _ := filepath.Rel(st.Dest, f)
+		m.afterUpload(st, f, rel)
+	}
+	asDoc, err := m.up.UploadGroup(st.ctx, chat, files, st.asDocFlag(), st.UploadProgress, onUp)
 	st.setAsDoc(asDoc)
 	for _, f := range files {
 		rel, _ := filepath.Rel(st.Dest, f)
 		st.endUpload(rel)
 		if err != nil {
-			st.addSkip(filepath.Base(f), "error: "+err.Error())
-			st.markFailed(rel)
+			if !st.isUploaded(rel) {
+				st.addSkip(filepath.Base(f), "error: "+err.Error())
+				st.markFailed(rel)
+			}
 			continue
 		}
-		m.afterUpload(st, f, rel)
+		if !st.isUploaded(rel) {
+			m.afterUpload(st, f, rel)
+		}
 	}
 	m.pace(st)
 }
@@ -273,7 +283,15 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 	// Oversized files.
 	limit := m.d.Cfg.UploadLimit()
 	if !args.IsMirror || args.UploadTG {
-		parts := media.HandleLarge(st.ctx, f, job.SplitLargeFile, limit)
+		parts := func() []string {
+			if m.heavySem != nil {
+				if err := m.heavySem.Acquire(st.ctx, 1); err != nil {
+					return nil
+				}
+				defer m.heavySem.Release(1)
+			}
+			return media.HandleLarge(st.ctx, f, job.SplitLargeFile, limit)
+		}()
 		switch {
 		case len(parts) == 0:
 			st.addSkip(name, "exceeds upload limit")
@@ -282,10 +300,21 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 		case len(parts) > 1 || parts[0] != f:
 			for _, p := range parts {
 				pr, _ := filepath.Rel(root, p)
+				if root != st.Dest {
+					pr = "extract/" + pr
+				}
 				st.addSplitParts(pr, filepath.Base(p))
 			}
 			_ = m.d.Store.MarkUploaded(context.Background(), job.ID, key)
 			st.markUploaded(key)
+			if nested {
+				for _, p := range parts {
+					if st.ctx.Err() != nil {
+						return
+					}
+					m.processFile(st, root, p, true)
+				}
+			}
 			return // parts are picked up on the next scan
 		}
 	}
@@ -344,6 +373,7 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		}
 		ok := m.send(st, statusOK(job.ID, name), tg.SendOpts{})
 		m.delLater(ok, 5*time.Second)
+		m.consumeArchive(st, f, rel)
 		if files := fsutil.ListUploadable(st.Extract); len(files) > 0 {
 			total := job.TotalFiles + len(files)
 			_ = m.d.Store.UpdateProgress(context.Background(), job.ID, storeTotal(total))
@@ -369,7 +399,6 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 			}
 			return true
 		}
-		m.consumeArchive(st, f, rel)
 		return true
 	}
 
@@ -425,8 +454,22 @@ func (m *Manager) consumeArchive(st *State, f, rel string) {
 // extract runs archive.Extract, prompting the user for a password as needed.
 func (m *Manager) extract(st *State, path, name string) error {
 	job := st.Job()
+	limits := archive.ExtractLimits{
+		Threads:          m.d.Cfg.ExtractThreads,
+		MaxExtractBytes:  m.d.Cfg.MaxExtractBytes,
+		MaxExtractFiles:  m.d.Cfg.MaxExtractFiles,
+		MinFreeDiskBytes: m.d.Cfg.MinFreeDiskBytes,
+	}
 	for {
-		err := archive.Extract(st.ctx, path, st.Extract, st.Args().Password)
+		err := func() error {
+			if m.heavySem != nil {
+				if aerr := m.heavySem.Acquire(st.ctx, 1); aerr != nil {
+					return aerr
+				}
+				defer m.heavySem.Release(1)
+			}
+			return archive.Extract(st.ctx, path, st.Extract, st.Args().Password, limits)
+		}()
 		if err == nil || !errors.Is(err, archive.ErrPasswordRequired) {
 			return err
 		}
@@ -466,13 +509,27 @@ func (m *Manager) extract(st *State, path, name string) error {
 func (m *Manager) convertVideo(st *State, f, root, key string) (string, string) {
 	job := st.Job()
 	name := filepath.Base(f)
+	if info, err := os.Stat(f); err == nil {
+		if free, ferr := fsutil.FreeDiskSpace(root); ferr == nil && int64(free) < 2*info.Size() {
+			slog.Warn("skipping remux due to low disk space", "file", name, "free", free, "needed", 2*info.Size())
+			return f, key
+		}
+	}
 	out := strings.TrimSuffix(f, filepath.Ext(f)) + ".mkv"
 	if _, err := os.Stat(out); err == nil {
 		out = strings.TrimSuffix(f, filepath.Ext(f)) + "_converted.mkv"
 	}
 	msg := m.send(st, status.Converting(job.ID, name, "MKV"), tg.SendOpts{Keyboard: cancelKeyboard(job.ID)})
 	st.setConverting(true, name)
-	ok := media.ConvertVideoToMKV(st.ctx, f, out)
+	ok := func() bool {
+		if m.heavySem != nil {
+			if err := m.heavySem.Acquire(st.ctx, 1); err != nil {
+				return false
+			}
+			defer m.heavySem.Release(1)
+		}
+		return media.ConvertVideoToMKV(st.ctx, f, out)
+	}()
 	st.setConverting(false, "")
 	m.del(msg)
 	if !ok {
@@ -518,7 +575,15 @@ func (m *Manager) maybeConvertAudio(st *State, f, root, key string) (string, str
 	out := strings.TrimSuffix(f, filepath.Ext(f)) + "_converted.mp3"
 	msg := m.send(st, status.Converting(job.ID, name, "MP3"), tg.SendOpts{Keyboard: cancelKeyboard(job.ID)})
 	st.setConverting(true, name)
-	ok := media.ConvertAudioToMP3(st.ctx, f, out)
+	ok := func() bool {
+		if m.heavySem != nil {
+			if err := m.heavySem.Acquire(st.ctx, 1); err != nil {
+				return false
+			}
+			defer m.heavySem.Release(1)
+		}
+		return media.ConvertAudioToMP3(st.ctx, f, out)
+	}()
 	st.setConverting(false, "")
 	m.del(msg)
 	if !ok {

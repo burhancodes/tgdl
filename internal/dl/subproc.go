@@ -304,6 +304,7 @@ func runProc(ctx context.Context, cmd *exec.Cmd, procs ProcRegistry, onLine func
 			}
 			mu.Unlock()
 		}
+		_, _ = io.Copy(io.Discard, stdout)
 	}()
 	go func() {
 		defer wg.Done()
@@ -348,12 +349,11 @@ func countNew(before, after map[string]struct{}) int {
 	return n
 }
 
-// runGDL runs gallery-dl once for a URL, returning success and stderr tail.
-func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base int) (bool, string, error) {
+// runGDL runs gallery-dl once for a URL, returning success, stderr tail, and after fileSet.
+func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base int, before map[string]struct{}) (bool, string, map[string]struct{}, error) {
 	if _, err := exec.LookPath("gallery-dl"); err != nil {
-		return false, "", fmt.Errorf("%w: gallery-dl (install with: pip install gallery-dl)", ErrToolMissing)
+		return false, "", nil, fmt.Errorf("%w: gallery-dl (install with: pip install gallery-dl)", ErrToolMissing)
 	}
-	before := fileSet(dest)
 	cmd := r.gdlCmd(url, dest, o)
 	slog.Info("gallery-dl run", "url", url, "user_id", o.UserID)
 	out, err := runProc(ctx, cmd, o.Procs, func(line string) bool {
@@ -370,7 +370,7 @@ func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base i
 		return true
 	})
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	after := fileSet(dest)
 	stderr := lastChars(strings.Join(out.stderr, "\n"), 3000)
@@ -378,15 +378,14 @@ func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base i
 	if !ok {
 		slog.Info("gallery-dl failed or produced no files", "url", url, "code", out.code)
 	}
-	return ok, stderr, nil
+	return ok, stderr, after, nil
 }
 
-func (r *Runner) runCDL(ctx context.Context, url, dest string, o RunOpts, base int) (bool, string, error) {
+func (r *Runner) runCDL(ctx context.Context, url, dest string, o RunOpts, base int, before map[string]struct{}) (bool, string, map[string]struct{}, error) {
 	cmd, err := r.cdlCmd(url, dest, o)
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
-	before := fileSet(dest)
 	slog.Info("cyberdrop-dl run", "url", url, "user_id", o.UserID)
 	count := 0
 	out, err := runProc(ctx, cmd, o.Procs, func(line string) bool {
@@ -406,7 +405,7 @@ func (r *Runner) runCDL(ctx context.Context, url, dest string, o RunOpts, base i
 		return false
 	})
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	after := fileSet(dest)
 	combined := strings.Join(out.stdout, "\n") + "\n" + strings.Join(out.stderr, "\n")
@@ -425,7 +424,7 @@ func (r *Runner) runCDL(ctx context.Context, url, dest string, o RunOpts, base i
 	if !ok {
 		slog.Info("cyberdrop-dl failed or produced no files", "url", url, "code", out.code)
 	}
-	return ok, stderr, nil
+	return ok, stderr, after, nil
 }
 
 func lastChars(s string, n int) string {
@@ -458,16 +457,17 @@ func (r *Runner) Run(ctx context.Context, rawURL, dest string, o RunOpts) (Resul
 			var ok bool
 			var se string
 			var err error
+			var afterSet map[string]struct{}
 			opts := o
 			if i > 0 {
 				opts.ConfigPath = "" // config override only applies to the primary engine
 			}
-			before := len(fileSet(dest))
+			beforeSet := fileSet(dest)
 			switch eng {
 			case EngineGalleryDL:
-				ok, se, err = r.runGDL(ctx, u, dest, opts, total)
+				ok, se, afterSet, err = r.runGDL(ctx, u, dest, opts, total, beforeSet)
 			case EngineCyberdrop:
-				ok, se, err = r.runCDL(ctx, u, dest, opts, total)
+				ok, se, afterSet, err = r.runCDL(ctx, u, dest, opts, total, beforeSet)
 			}
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
@@ -483,7 +483,8 @@ func (r *Runner) Run(ctx context.Context, rawURL, dest string, o RunOpts) (Resul
 				lastStderr = se
 			}
 			if ok {
-				total += max(len(fileSet(dest))-before, 1)
+				newFiles := countNew(beforeSet, afterSet)
+				total += max(newFiles, 1)
 				handled = true
 				break
 			}

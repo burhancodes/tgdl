@@ -3,6 +3,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"sort"
 	"sync"
@@ -89,6 +90,8 @@ type State struct {
 	hosts         map[string]status.HostState
 	mirrors       []MirrorRecord
 	webMirrorDone bool
+	mirrorWG      sync.WaitGroup
+	maxBytes      int64
 
 	downloadResult dl.Result
 	cancelled      atomic.Bool
@@ -99,6 +102,21 @@ type State struct {
 	trigger        chan struct{}
 
 	sess *sessions
+}
+
+func (s *State) SetMaxBytes(b int64) {
+	s.mu.Lock()
+	s.maxBytes = b
+	s.mu.Unlock()
+}
+
+func (s *State) checkMaxBytesLocked(current int64) {
+	if s.maxBytes > 0 && current > s.maxBytes {
+		if s.fatal == "" {
+			s.fatal = fmt.Sprintf("Job exceeded maximum allowed download size of %d bytes", s.maxBytes)
+		}
+		s.cancel()
+	}
 }
 
 type archiveLink struct{ Name, URL string }
@@ -194,6 +212,7 @@ func (s *State) SetPatchStage(v string) {
 func (s *State) Bytes(p dl.Progress) {
 	s.mu.Lock()
 	s.downloaded = p.Current
+	s.checkMaxBytesLocked(p.Current)
 	if p.Total > 0 {
 		s.expected = p.Total
 		s.determinate = true
@@ -212,6 +231,7 @@ func (s *State) Bytes(p dl.Progress) {
 func (s *State) SpeedBytes(downloaded int64, speed float64, file string) {
 	s.mu.Lock()
 	s.downloaded, s.speed = downloaded, speed
+	s.checkMaxBytesLocked(downloaded)
 	if file != "" {
 		s.currentFile = file
 	}
@@ -234,6 +254,7 @@ func (s *State) Count(n int, file, _ string) {
 func (s *State) Aria(pct float64, completed, speed int64, seeders, conns int, name string) {
 	s.mu.Lock()
 	s.determinate, s.pct, s.downloaded, s.speed = true, pct, completed, float64(speed)
+	s.checkMaxBytesLocked(completed)
 	s.seeders, s.peers = seeders, conns
 	if name != "" {
 		s.currentFile = name
@@ -271,6 +292,7 @@ func (s *State) smoothSpeedLocked(cur int64) {
 func (s *State) observeDisk(size int64, currentFile string) {
 	s.mu.Lock()
 	s.downloaded = size
+	s.checkMaxBytesLocked(size)
 	s.smoothSpeedLocked(size)
 	if currentFile != "" {
 		s.currentFile = currentFile
@@ -285,6 +307,12 @@ func (s *State) deleted() int64     { s.mu.Lock(); defer s.mu.Unlock(); return s
 // ---- upload bookkeeping ---------------------------------------------------
 
 func (s *State) markUploaded(rel string) { s.mu.Lock(); s.uploaded[rel] = struct{}{}; s.mu.Unlock() }
+func (s *State) isUploaded(rel string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.uploaded[rel]
+	return ok
+}
 func (s *State) markFailed(rel string)   { s.mu.Lock(); s.failed[rel] = struct{}{}; s.mu.Unlock() }
 func (s *State) beginUpload(rel, name string) {
 	s.mu.Lock()

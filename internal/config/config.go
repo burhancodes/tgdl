@@ -23,6 +23,11 @@ type Config struct {
 	// BotAPIURL points at a self-hosted telegram-bot-api server started with
 	// --local. It is required for transfers above the 50MB cloud Bot API limit.
 	BotAPIURL string
+	// BotAPILocalDirMap maps host paths to paths visible to a local
+	// telegram-bot-api server container, e.g. "hostprefix=containerprefix".
+	BotAPILocalDirMap    string
+	LocalHostPrefix      string
+	LocalContainerPrefix string
 
 	// Upload hosts.
 	PixeldrainAPIKey string
@@ -83,12 +88,29 @@ type Config struct {
 	TGUploadMaxRetries int
 	MaxConcurrentDL    int
 	MaxConcurrentUL    int
+	MaxConcurrentHeavy int
+	AlbumMaxTotalBytes int64
+
+	// Heavy tool & extraction limits.
+	ExtractThreads   int
+	ArchiveThreads   int
+	ArchiveZipLevel  int
+	MaxExtractBytes  int64
+	MaxExtractFiles  int
+	MinFreeDiskBytes int64
+
+	// Bot API Data directory.
+	BotAPIDataDir string
+
+	// Memory limit.
+	MemoryLimitMB int64
 
 	// Torrents.
-	TorrentTimeout time.Duration
-	SearchLimit    int
-	MagnetioURL    string
-	MagnetioSecret string
+	TorrentTimeout       time.Duration
+	SearchLimit          int
+	MagnetioURL          string
+	MagnetioSecret       string
+	AriaMaxConcurrentDL int
 
 	// Access control.
 	OwnerID       int64
@@ -115,6 +137,7 @@ func Load() (*Config, error) {
 		APIHash:   envStr("TG_API_HASH", ""),
 		BotToken:  envStr("TG_BOT_TOKEN", ""),
 		BotAPIURL: envStr("TG_BOT_API_URL", ""),
+		BotAPILocalDirMap: envStr("TG_BOT_API_LOCAL_DIR_MAP", ""),
 
 		PixeldrainAPIKey: envStr("PIXELDRAIN_API_KEY", ""),
 		PixeldrainDomain: pixeldrainDomain(envStr("PIXELDRAIN_DOMAIN", "pixeldrain.com")),
@@ -167,16 +190,38 @@ func Load() (*Config, error) {
 		TGUploadMaxRetries: envInt("TG_UPLOAD_MAX_RETRIES", 3),
 		MaxConcurrentDL:    max(1, envInt("TG_MAX_CONCURRENT_DOWNLOADS", 1)),
 		MaxConcurrentUL:    max(1, envInt("TG_MAX_CONCURRENT_UPLOADS", 1)),
+		MaxConcurrentHeavy: max(1, envInt("TG_MAX_CONCURRENT_HEAVY", 1)),
+		AlbumMaxTotalBytes: envInt64("TG_ALBUM_MAX_BYTES", 64*1024*1024),
+
+		ExtractThreads:   max(1, envInt("EXTRACT_THREADS", 2)),
+		ArchiveThreads:   max(1, envInt("ARCHIVE_THREADS", 2)),
+		ArchiveZipLevel:  envInt("ARCHIVE_ZIP_LEVEL", 1),
+		MaxExtractBytes:  envInt64("MAX_EXTRACT_BYTES", 20*1024*1024*1024),
+		MaxExtractFiles:  envInt("MAX_EXTRACT_FILES", 200000),
+		MinFreeDiskBytes: envInt64("MIN_FREE_DISK_BYTES", 2*1024*1024*1024),
+
+		BotAPIDataDir: envStr("TG_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api"),
+		MemoryLimitMB: envInt64("TGDL_MEMORY_LIMIT_MB", 0),
 
 		TorrentTimeout: envSeconds("TORRENT_TIMEOUT", 120),
 		SearchLimit:    envInt("SEARCH_LIMIT", 300),
 		MagnetioURL:    envStr("MAGNETIO_RPC_URL", "http://magnetio-scraper:8080/rpc"),
 		MagnetioSecret: envStr("MAGNETIO_RPC_SECRET", ""),
+		AriaMaxConcurrentDL: envInt("ARIA_MAX_CONCURRENT_DOWNLOADS", 1),
 
 		MaxJobsPerChat: envInt("MAX_JOBS_PER_CHAT", 3),
 
 		LogLevel:  strings.ToUpper(envStr("LOG_LEVEL", "INFO")),
 		LogFormat: strings.ToLower(envStr("LOG_FORMAT", "text")),
+	}
+
+	if c.BotAPILocalDirMap != "" {
+		h, cont, ok := ParseLocalDirMap(c.BotAPILocalDirMap)
+		if !ok {
+			return nil, fmt.Errorf("invalid TG_BOT_API_LOCAL_DIR_MAP %q: expected hostprefix=containerprefix", c.BotAPILocalDirMap)
+		}
+		c.LocalHostPrefix = h
+		c.LocalContainerPrefix = cont
 	}
 
 	if raw, ok := os.LookupEnv("OWNER_ID"); !ok {
@@ -215,6 +260,29 @@ func Load() (*Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// ParseLocalDirMap parses "hostprefix=containerprefix" into (hostPrefix, containerPrefix, ok).
+func ParseLocalDirMap(raw string) (string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(raw, "=", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	hp := strings.TrimSpace(parts[0])
+	cp := strings.TrimSpace(parts[1])
+	if hp == "" || cp == "" {
+		return "", "", false
+	}
+	return hp, cp, true
+}
+
+// LocalDirMap parses TG_BOT_API_LOCAL_DIR_MAP into host and container prefixes.
+func (c *Config) LocalDirMap() (hostPrefix, containerPrefix string, ok bool) {
+	return ParseLocalDirMap(c.BotAPILocalDirMap)
 }
 
 // UploadLimit is the largest single file (bytes) the configured Bot API
@@ -329,6 +397,13 @@ func envStr(key, def string) string {
 
 func envInt(key string, def int) int {
 	if v, err := strconv.Atoi(envStr(key, "")); err == nil {
+		return v
+	}
+	return def
+}
+
+func envInt64(key string, def int64) int64 {
+	if v, err := strconv.ParseInt(envStr(key, ""), 10, 64); err == nil && v > 0 {
 		return v
 	}
 	return def

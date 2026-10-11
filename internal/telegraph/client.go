@@ -105,7 +105,7 @@ func (c *Client) call(ctx context.Context, method, pathSuffix string, values url
 		return nil, &RetryAfterError{Seconds: retryAfter}
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

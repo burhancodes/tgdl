@@ -18,6 +18,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 	"github.com/burhanverse/tgdl/internal/upload"
+	"golang.org/x/sync/semaphore"
 )
 
 // Patcher signs/patches an APK (implemented in internal/apk).
@@ -35,7 +36,8 @@ type Deps struct {
 	Runner  *dl.Runner
 	Aria    *torrent.Aria2
 	Xenforo *dl.Xenforo
-	Patcher Patcher
+	Patcher  Patcher
+	HeavySem *semaphore.Weighted
 }
 
 // Request is what a Source sees.
@@ -172,6 +174,12 @@ func (s patchSource) Fetch(ctx context.Context, r *Request) dl.Result {
 		input = files[0]
 	default:
 		return fail("no APK source provided")
+	}
+	if s.d.HeavySem != nil {
+		if err := s.d.HeavySem.Acquire(ctx, 1); err != nil {
+			return fail("acquire heavy semaphore: %v", err)
+		}
+		defer s.d.HeavySem.Release(1)
 	}
 	out, err := s.d.Patcher.Patch(ctx, input, work, orig, s.d.Cfg.UserKeystore(r.Args.UserIDInt()), st.SetPatchStage)
 	if err != nil {

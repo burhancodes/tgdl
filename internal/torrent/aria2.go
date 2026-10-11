@@ -101,16 +101,28 @@ func (a *Aria2) Start(ctx context.Context) error {
 	}
 	secret := hex.EncodeToString(sec[:])
 
+	maxConcurrent := 1
+	if a.cfg.AriaMaxConcurrentDL > 0 {
+		maxConcurrent = a.cfg.AriaMaxConcurrentDL
+	}
+
 	args := []string{
 		"--enable-rpc", "--rpc-listen-all=false",
 		"--rpc-listen-port=" + strconv.Itoa(port),
 		"--rpc-secret=" + secret,
 		"--log=" + filepath.Join(a.cfg.LogDir, "aria2c_daemon.log"),
-		"--log-level=notice",
+		"--log-level=warn",
+		"--console-log-level=warn",
+		"--file-allocation=none",
+		"--disk-cache=32M",
+		"--max-concurrent-downloads=" + strconv.Itoa(maxConcurrent),
+		"--bt-max-peers=60",
+		"--bt-max-open-files=20",
+		"--max-connection-per-server=4",
 		"--seed-time=0", "--seed-ratio=0.0",
 		"--bt-tracker-connect-timeout=10", "--bt-tracker-timeout=10",
 		"--enable-dht=true", "--bt-enable-lpd=true", "--enable-peer-exchange=true",
-		"--bt-max-peers=120", "--max-overall-upload-limit=50K",
+		"--max-overall-upload-limit=50K",
 		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 		"--bt-tracker=" + a.trackers.CSV(),
 	}

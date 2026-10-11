@@ -173,7 +173,7 @@ func (a *App) cmdHostUpload(host string) tgbot.HandlerFunc {
 			a.reply(ctx, m, "Reply to a Telegram file with this command to upload it.")
 			return
 		}
-		go a.hostUpload(context.WithoutCancel(ctx), m, f, host)
+		a.queueHostUpload(ctx, m, f, host)
 	}
 }
 
@@ -264,9 +264,18 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))
 			return
 		}
+		st, err := os.Stat(p)
+		if err != nil {
+			a.reply(ctx, m, "Could not access the file: "+code(err.Error()))
+			return
+		}
+		if st.Size() > 2<<20 {
+			a.reply(ctx, m, "File too large: configuration and cookies files must be under 2 MiB.")
+			return
+		}
 		data, err := os.ReadFile(p)
-		if err != nil || len(data) > 2<<20 {
-			a.reply(ctx, m, "Could not read the file (max 2MB).")
+		if err != nil {
+			a.reply(ctx, m, "Could not read the file: "+code(err.Error()))
 			return
 		}
 		name := strings.ToLower(f.Name)

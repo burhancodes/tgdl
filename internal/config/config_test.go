@@ -55,3 +55,28 @@ func TestPixeldrainDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLocalDirMap(t *testing.T) {
+	cases := []struct {
+		raw      string
+		wantHost string
+		wantCont string
+		wantOK   bool
+	}{
+		{"/app/data=/app/data", "/app/data", "/app/data", true},
+		{" ./data = /var/data ", "./data", "/var/data", true},
+		{"hostprefix=containerprefix", "hostprefix", "containerprefix", true},
+		{"invalid_no_equal", "", "", false},
+		{"=container", "", "", false},
+		{"host=", "", "", false},
+		{"", "", "", false},
+	}
+	for _, tc := range cases {
+		h, c, ok := ParseLocalDirMap(tc.raw)
+		if ok != tc.wantOK || h != tc.wantHost || c != tc.wantCont {
+			t.Errorf("ParseLocalDirMap(%q) = (%q, %q, %v); want (%q, %q, %v)",
+				tc.raw, h, c, ok, tc.wantHost, tc.wantCont, tc.wantOK)
+		}
+	}
+}
+

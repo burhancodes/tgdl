@@ -1,9 +1,12 @@
 package bot
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -48,17 +51,27 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(p)
+	st, err := os.Stat(p)
 	if err != nil {
 		return nil, err
 	}
+	if st.Size() > 2<<20 {
+		return nil, errors.New("URL list file exceeds 2 MiB limit")
+	}
+	file, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 	var out []string
-	for _, line := range strings.Split(string(b), "\n") {
-		if line = strings.TrimSpace(line); isURLToken(line) {
+	sc := bufio.NewScanner(io.LimitReader(file, 2<<20))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if isURLToken(line) {
 			out = append(out, line)
 		}
 	}
-	return out, nil
+	return out, sc.Err()
 }
 
 // collectURLs merges URLs from the command tokens, a replied text message and
@@ -154,7 +167,7 @@ func (a *App) cmdGofile(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 
 	if len(urls) == 0 {
 		if _, media := mediaSource(m); media != nil {
-			go a.hostUpload(context.WithoutCancel(ctx), m, media, "gofile")
+			a.queueHostUpload(ctx, m, media, "gofile")
 			return
 		}
 	}
@@ -235,6 +248,15 @@ func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmpDir, nil)
 		if err != nil {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))
+			return
+		}
+		st, err := os.Stat(p)
+		if err != nil {
+			a.reply(ctx, m, "Read failed: "+code(err.Error()))
+			return
+		}
+		if st.Size() > 2<<20 {
+			a.reply(ctx, m, "File too large: credentials file must be under 2 MiB.")
 			return
 		}
 		data, err := os.ReadFile(p)

@@ -15,6 +15,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/auth"
 	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/dl"
+	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/jobs"
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/status"
@@ -23,22 +24,24 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 	"github.com/burhanverse/tgdl/internal/upload"
+	"golang.org/x/sync/semaphore"
 )
 
 // App holds everything the handlers need.
 type App struct {
-	cfg       *config.Config
-	auth      *auth.Authorizer
-	store     *store.Store
-	mgr       *jobs.Manager
-	tg        tg.Client
-	api       *tg.BotAPI
-	keys      *upload.Keys
-	hosts     *upload.Hosts
-	search    *torrent.Magnetio
-	lim       *pacing.TelegramLimiter
-	runner    *dl.Runner
-	telegraph *telegraph.Helper
+	cfg           *config.Config
+	auth          *auth.Authorizer
+	store         *store.Store
+	mgr           *jobs.Manager
+	tg            tg.Client
+	api           *tg.BotAPI
+	keys          *upload.Keys
+	hosts         *upload.Hosts
+	search        *torrent.Magnetio
+	lim           *pacing.TelegramLimiter
+	runner        *dl.Runner
+	telegraph     *telegraph.Helper
+	hostUploadSem *semaphore.Weighted
 }
 
 // Deps groups constructor arguments.
@@ -63,10 +66,47 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	if tele == nil {
 		tele = telegraph.NewHelper()
 	}
+	semLimit := int64(1)
+	if d.Cfg != nil && d.Cfg.MaxConcurrentDL > 0 {
+		semLimit = int64(d.Cfg.MaxConcurrentDL)
+	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
-		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele}
+		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele,
+		hostUploadSem: semaphore.NewWeighted(semLimit)}
 	a.register(b)
 	return a
+}
+
+func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, host string) {
+	if a.cfg != nil {
+		free, err := fsutil.FreeDiskSpace(a.cfg.DownloadsDir())
+		if err == nil {
+			need := uint64(a.cfg.MinFreeDiskBytes)
+			if f.Size > 0 {
+				need += uint64(f.Size)
+			}
+			if free < need {
+				a.reply(ctx, m, "Upload aborted: insufficient disk space on server (less than 2 GiB free).")
+				return
+			}
+		}
+	}
+	go func() {
+		bgCtx := context.WithoutCancel(ctx)
+		if a.hostUploadSem != nil {
+			if !a.hostUploadSem.TryAcquire(1) {
+				ref, _ := a.tg.Send(bgCtx, m.Chat.ID, "Upload queued… waiting for active downloads/uploads to finish.", tg.SendOpts{ReplyTo: m.ID})
+				if err := a.hostUploadSem.Acquire(bgCtx, 1); err != nil {
+					return
+				}
+				if ref.Valid() {
+					_ = a.tg.Delete(bgCtx, ref)
+				}
+			}
+			defer a.hostUploadSem.Release(1)
+		}
+		a.hostUpload(bgCtx, m, f, host)
+	}()
 }
 
 // NewClient creates the Telegram bot with the auth middleware and returns it
@@ -87,7 +127,17 @@ func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.
 	if err != nil {
 		return nil, nil, err
 	}
-	return b, tg.NewBotAPI(b, cfg.BotToken), nil
+	api := tg.NewBotAPI(b, cfg.BotToken)
+	if cfg.BotAPIURL != "" {
+		api.BaseURL = cfg.BotAPIURL
+	}
+	if cfg.LocalHostPrefix != "" {
+		api.SetLocalDirMap(cfg.LocalHostPrefix, cfg.LocalContainerPrefix)
+	}
+	if cfg.BotAPIDataDir != "" {
+		api.SetDataDir(cfg.BotAPIDataDir)
+	}
+	return b, api, nil
 }
 
 func authMiddleware(a *auth.Authorizer) tgbot.Middleware {

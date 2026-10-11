@@ -7,8 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,8 +53,20 @@ func run() error {
 		return err
 	}
 
+	initMemoryLimit(cfg)
+	if os.Getenv("TGDL_PPROF") == "1" {
+		go func() {
+			slog.Info("starting pprof on 127.0.0.1:6060")
+			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
+				slog.Warn("pprof server error", "err", err)
+			}
+		}()
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	logging.StartLogTruncator(ctx, cfg.LogDir, 10<<20, "aria2c_daemon.log", "magnetio_scraper.log", "uploads.log")
 
 	st, err := store.Open(ctx, cfg.DBPath())
 	if err != nil {
@@ -140,4 +157,44 @@ func commands() []tg.Command {
 		{Name: "help", Description: "Show the help guide"},
 		{Name: "start", Description: "Start the bot"},
 	}
+}
+
+func initMemoryLimit(cfg *config.Config) {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	var limitBytes int64
+	if cfg.MemoryLimitMB > 0 {
+		limitBytes = cfg.MemoryLimitMB << 20
+	} else {
+		limit := readCgroupMemoryLimit()
+		if limit > 0 {
+			limitBytes = int64(float64(limit) * 0.75)
+		}
+	}
+	if limitBytes > 0 {
+		debug.SetMemoryLimit(limitBytes)
+		slog.Info("set runtime memory limit", "bytes", limitBytes, "mb", limitBytes>>20)
+	}
+}
+
+func readCgroupMemoryLimit() int64 {
+	paths := []string{
+		"/sys/fs/cgroup/memory.max",
+		"/sys/fs/cgroup/memory/memory.limit_in_bytes",
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		s := strings.TrimSpace(string(data))
+		if s == "max" || s == "" {
+			continue
+		}
+		if val, err := strconv.ParseInt(s, 10, 64); err == nil && val > 0 && val < (1<<62) {
+			return val
+		}
+	}
+	return 0
 }
