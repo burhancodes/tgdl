@@ -8,15 +8,15 @@ import { resolveSafeTarget } from '../lib/ssrf.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { logger } from '../lib/logger.js';
 
-export const id = 'torznab';
+export const id   = 'torznab';
 export const name = 'Torznab';
 
 const CATEGORY_MOVIES = '2000';
-const CATEGORY_TV = '5000';
+const CATEGORY_TV     = '5000';
 
 export async function scrape(meta) {
   const baseUrl = meta.torznabUrl;
-  const apiKey = meta.torznabApiKey;
+  const apiKey  = meta.torznabApiKey;
   if (!baseUrl) return [];
 
   // Resolve + validate the user-supplied URL and pin the verified IP so the
@@ -39,10 +39,13 @@ export async function scrape(meta) {
 
     const $ = cheerio.load(data, { xmlMode: true });
     const results = [];
+    // An imdbid query is matched by the indexer, so results are tied to the
+    // title even when their names are localized (see filterByContent).
+    const matchedById = Boolean(params.imdbid);
 
     $('item').each((_, el) => {
       const item = $(el);
-      const record = normalise(item, meta);
+      const record = normalise(item, meta, matchedById);
       if (record) results.push(record);
     });
 
@@ -76,32 +79,33 @@ function buildParams(meta, apiKey) {
   return params;
 }
 
-function normalise(item, meta) {
+function normalise(item, meta, matchedById) {
   const title = item.find('title').text().trim();
   if (!title) return null;
 
   const infoHash = extractInfoHash(item);
   if (!infoHash) return null;
 
-  const seeders = attrValue(item, 'seeders');
-  const peers = attrValue(item, 'peers');
-  const sizeEl = item.find('size').text();
-  const encLen = item.find('enclosure').attr('length');
+  const seeders  = attrValue(item, 'seeders');
+  const peers    = attrValue(item, 'peers');
+  const sizeEl   = item.find('size').text();
+  const encLen   = item.find('enclosure').attr('length');
 
   const parsed = parseTitle(title);
 
   const parsedSeeders = parseInt(seeders, 10);
-  const parsedPeers = parseInt(peers, 10);
-  const parsedSize = parseInt(sizeEl || encLen || '0', 10);
+  const parsedPeers   = parseInt(peers, 10);
+  const parsedSize    = parseInt(sizeEl || encLen || '0', 10);
 
   return {
     infoHash,
     title,
-    seeders: Number.isFinite(parsedSeeders) ? parsedSeeders : 0,
+    seeders:  Number.isFinite(parsedSeeders) ? parsedSeeders : 0,
     leechers: Number.isFinite(parsedPeers) ? Math.max(0, parsedPeers - (parsedSeeders || 0)) : 0,
-    size: Number.isFinite(parsedSize) ? parsedSize : 0,
+    size:     Number.isFinite(parsedSize) ? parsedSize : 0,
     provider: 'Torznab',
-    imdbId: meta.imdbId || null,
+    imdbId:   meta.imdbId || null,
+    matchedById,
     ...parsed,
   };
 }

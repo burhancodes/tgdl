@@ -133,7 +133,7 @@ export async function cacheWrap(key, loader, ttlSeconds = 3600) {
   }
 
   const value = await loader();
-  const isEmpty = Array.isArray(value) && value.length === 0;
+  const isEmpty = value == null || (Array.isArray(value) && value.length === 0);
 
   if (!isEmpty && value !== null && value !== undefined) {
     try {

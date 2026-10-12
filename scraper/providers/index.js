@@ -52,13 +52,30 @@ const ALL_PROVIDERS = [
   torznab,
 ];
 
+// Providers disabled on this host via env (comma-separated provider ids), e.g.
+// SCRAPER_DISABLED_PROVIDERS=glotorrents,kickasstorrents,1337x
+// Disabled providers are skipped even when a client explicitly requests them.
+const DISABLED_PROVIDERS = new Set(
+  (process.env.SCRAPER_DISABLED_PROVIDERS ?? '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean)
+);
+const ACTIVE_PROVIDERS = ALL_PROVIDERS.filter(p => !DISABLED_PROVIDERS.has(p.id));
+if (DISABLED_PROVIDERS.size) {
+  logger.info(`Disabled providers: ${[...DISABLED_PROVIDERS].join(', ')}`);
+}
+
 const limit = pLimit(Math.max(1, parseInt(process.env.SCRAPER_CONCURRENCY ?? '12', 10) || 12));
-const PROVIDER_TIMEOUT_MS = parseInt(process.env.SCRAPER_PROVIDER_TIMEOUT_MS ?? '20000', 10);
-const HARD_TIMEOUT_MS = parseInt(process.env.SCRAPER_HARD_TIMEOUT_MS ?? '60000', 10);
+const PROVIDER_TIMEOUT_MS = parseInt(process.env.SCRAPER_PROVIDER_TIMEOUT_MS ?? '15000', 10);
+const HARD_TIMEOUT_MS     = parseInt(process.env.SCRAPER_HARD_TIMEOUT_MS     ?? String(PROVIDER_TIMEOUT_MS + 2000), 10);
+const EARLY_RETURN_MS     = parseInt(process.env.SCRAPER_EARLY_RETURN_MS     ?? '6000', 10);
+const MIN_EARLY_RESULTS   = parseInt(process.env.SCRAPER_MIN_EARLY_RESULTS   ?? '10', 10);
 
 /**
  * Scrape all (or a subset of) providers for a given content item.
- * Waits for all providers to complete (or time out individually / hit hard deadline).
+ * Uses early-return: responds after EARLY_RETURN_MS if enough results
+ * are collected, without waiting for slow providers.
  *
  * @param {string}   type        'movie' | 'series' | 'anime'
  * @param {object}   meta        From cinemeta: { name, year, imdbId, season, episode }
@@ -69,18 +86,21 @@ const HARD_TIMEOUT_MS = parseInt(process.env.SCRAPER_HARD_TIMEOUT_MS ?? '60000',
  */
 export async function scrapeAll(type, meta, providerIds = null, context = {}, strict = undefined) {
   const isStrict = context?.strict !== undefined ? Boolean(context.strict) : (strict !== undefined ? Boolean(strict) : true);
-  const providers = ALL_PROVIDERS.filter(p =>
+  const providers = ACTIVE_PROVIDERS.filter(p =>
     !providerIds || providerIds.includes(p.id)
   );
 
   const collected = [];
+  let matchedCount = 0;
   let resolved = false;
+  const startedAt = Date.now();
   let completedCount = 0;
 
   return new Promise((resolve) => {
     const finalize = () => {
       if (resolved) return;
       resolved = true;
+      clearTimeout(earlyTimer);
       clearTimeout(hardTimer);
 
       logger.info(`Scrape totals: ${collected.length} raw, ${completedCount}/${providers.length} providers responded`);
@@ -92,7 +112,17 @@ export async function scrapeAll(type, meta, providerIds = null, context = {}, st
       resolve(matched);
     };
 
-    // Hard deadline: cut off after HARD_TIMEOUT_MS as fallback if providers hang
+    // Early return: after EARLY_RETURN_MS, return if we have enough results.
+    // Counts only results that pass the content filter, so a provider that
+    // dumps an unrelated feed can't trigger an early return that ends empty.
+    const earlyTimer = setTimeout(() => {
+      if (!resolved && matchedCount >= MIN_EARLY_RESULTS) {
+        logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${providers.length} providers after ${EARLY_RETURN_MS}ms`);
+        finalize();
+      }
+    }, EARLY_RETURN_MS);
+
+    // Hard deadline: cut off after HARD_TIMEOUT_MS even if providers are still pending
     const hardTimer = setTimeout(() => {
       if (!resolved) {
         logger.info(`Hard timeout: ${collected.length} results from ${completedCount}/${providers.length} providers after ${HARD_TIMEOUT_MS}ms`);
@@ -113,12 +143,18 @@ export async function scrapeAll(type, meta, providerIds = null, context = {}, st
           );
           logger.info(`[${p.name}] ${results.length} results in ${Date.now() - start}ms`);
           collected.push(...results);
+          matchedCount += (isStrict ? filterByContent(results, meta).length : results.length);
         } catch (err) {
           logger.warn(`[${p.name}] ${err.message} (${Date.now() - start}ms)`);
         } finally {
           completedCount++;
           // If all providers finished, return immediately
           if (completedCount >= providers.length) finalize();
+          // Past the early-return window: return as soon as enough results land
+          else if (Date.now() - startedAt >= EARLY_RETURN_MS && matchedCount >= MIN_EARLY_RESULTS) {
+            logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${providers.length} providers after ${Date.now() - startedAt}ms`);
+            finalize();
+          }
         }
       })
     );
@@ -160,8 +196,12 @@ function deduplicate(records) {
  * Filter out torrents whose title does not match the requested content.
  * For series: title must contain a season/episode marker matching the request.
  * For movies: title must contain at least part of the movie name.
+ * Torznab records matched by IMDb ID skip the name check, and only fail the
+ * series check on an explicit marker for another season or episode: the
+ * indexer already got the ID (plus season and episode), and their titles are
+ * often localized.
  */
-function filterByContent(records, meta) {
+export function filterByContent(records, meta) {
   if (!meta?.name) return records;
 
   const nameWords = normalizeTitle(meta.name).split(/\s+/).filter(w => w.length > 1);
@@ -174,7 +214,9 @@ function filterByContent(records, meta) {
     if (!r.title) return false;
     const norm = normalizeTitle(r.title);
 
-    if (nameWords.length <= 2) {
+    if (r.matchedById) {
+      // Matched by ID upstream; skip the name check.
+    } else if (nameWords.length <= 2) {
       const match = phraseRegex.exec(norm);
       if (!match) return false;
       const after = norm.slice(match.index + match[0].length).trim();
@@ -203,11 +245,26 @@ function filterByContent(records, meta) {
         `\\bseason\\s*0*${s}\\b|\\bcomplete\\b.*\\bs0*${s}\\b`,
         'i'
       ).test(r.title);
-      if (!hasSeasonEp && !hasLooseEp && !hasSeasonPack) return false;
+      if (!hasSeasonEp && !hasLooseEp && !hasSeasonPack) {
+        // ID matches only fail on a marker for another season or episode.
+        if (!r.matchedById || hasAnySeasonMarker(r.title, e != null)) return false;
+      }
     }
 
     return true;
   });
+}
+
+/**
+ * Same markers as the series check above, for any season or episode number.
+ */
+function hasAnySeasonMarker(title, withEpisode) {
+  return new RegExp(
+    withEpisode
+      ? `s\\d+\\s*e\\d+\\b|\\b\\d{1,2}x\\d{1,3}\\b|\\bseason\\s*\\d+\\b|\\bcomplete\\b.*\\bs\\d+\\b`
+      : `s\\d+(e\\d|\\b)|\\bseason\\s*\\d+\\b|\\bcomplete\\b.*\\bs\\d+\\b`,
+    'i'
+  ).test(title);
 }
 
 function isTorrentMetadata(word) {
@@ -231,5 +288,5 @@ function normalizeTitle(str) {
  * List all available provider IDs.
  */
 export function listProviders() {
-  return ALL_PROVIDERS.map(p => ({ id: p.id, name: p.name }));
+  return ACTIVE_PROVIDERS.map(p => ({ id: p.id, name: p.name }));
 }

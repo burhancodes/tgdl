@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import { readFileSync } from 'node:fs';
 import express from 'express';
 import { scrapeAll, listProviders } from './providers/index.js';
 import { getMetadata } from './lib/cinemeta.js';
@@ -12,6 +13,12 @@ import { scrapeXenForo } from './xenforo/index.js';
 
 const app  = express();
 const PORT = process.env.PORT || 8080;
+const deploymentRevision = (() => {
+  try {
+    const value = readFileSync(new URL('./.deployment-revision', import.meta.url), 'utf8').trim();
+    return /^[a-f0-9]{40}$/.test(value) ? value : undefined;
+  } catch { return undefined; }
+})();
 
 // Cache TTLs
 const TTL_STREAMS = parseInt(process.env.CACHE_TTL_STREAMS ?? '3600', 10);
@@ -26,7 +33,7 @@ app.post('/rpc', rpcMiddleware);
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'magnetio-scraper', version: '1.2.0' });
+  res.json({ status: 'ok', service: 'magnetio-scraper', version: '1.2.0', revision: deploymentRevision });
 });
 
 // ─── Provider list ────────────────────────────────────────────────────────────
