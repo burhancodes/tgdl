@@ -21,7 +21,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 	"github.com/burhanverse/tgdl/internal/upload"
-	"golang.org/x/sync/semaphore"
 )
 
 type Deps struct {
@@ -32,7 +31,7 @@ type Deps struct {
 	Hosts    *upload.Hosts
 	Runner   *dl.Runner
 	Aria     *torrent.Aria2
-	HeavySem *semaphore.Weighted
+	HeavySem *ResizableSemaphore
 }
 
 type Request struct {

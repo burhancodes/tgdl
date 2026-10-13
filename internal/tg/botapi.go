@@ -25,9 +25,6 @@ import (
 
 var localDirMapWarnOnce sync.Once
 
-// BotAPI implements Client on top of github.com/go-telegram/bot. Point
-// TG_BOT_API_URL at a self-hosted `telegram-bot-api --local` server to lift
-// the cloud limits (2000 MB uploads and downloads).
 type BotAPI struct {
 	B            *bot.Bot
 	Token        string
@@ -40,15 +37,11 @@ type BotAPI struct {
 	serverVersion float64
 }
 
-// LocalDirMap translates local host file paths to paths visible by a local
-// telegram-bot-api server container sharing the downloads volume.
 type LocalDirMap struct {
 	HostPrefix      string
 	ContainerPrefix string
 }
 
-// FileURL checks if localPath falls under HostPrefix, and if so, returns
-// the corresponding file:/// URL as seen by the container.
 func (m *LocalDirMap) FileURL(localPath string) (string, bool) {
 	if m == nil || m.HostPrefix == "" || m.ContainerPrefix == "" {
 		return "", false
@@ -78,7 +71,6 @@ func (m *LocalDirMap) FileURL(localPath string) (string, bool) {
 	return "file:///" + strings.TrimPrefix(filepath.ToSlash(srvPath), "/"), true
 }
 
-// LocalPath translates a container file:/// URL back to a host path.
 func (m *LocalDirMap) LocalPath(fileURL string) (string, bool) {
 	if m == nil || m.HostPrefix == "" || m.ContainerPrefix == "" {
 		return "", false
@@ -123,15 +115,12 @@ func (a *BotAPI) SetLocalDirMapRaw(raw string) error {
 	return nil
 }
 
-// SetServerVersion overrides the Bot API server version.
 func (a *BotAPI) SetServerVersion(v float64) {
 	if a != nil {
 		a.serverVersion = v
 	}
 }
 
-// ServerVersion returns the detected or configured Bot API server version.
-// Defaults to 9.0 (cloud and modern local Bot API).
 func (a *BotAPI) ServerVersion() float64 {
 	if a != nil && a.serverVersion > 0 {
 		return a.serverVersion
@@ -144,9 +133,6 @@ func (a *BotAPI) ServerVersion() float64 {
 	return 9.0
 }
 
-// ProbeLocalDirMap verifies that the local telegram-bot-api server can access files
-// inside dataDir via the configured LocalDirMap. It creates a temporary probe file,
-// asks the server to resolve it, and cleans up the probe file.
 func (a *BotAPI) ProbeLocalDirMap(ctx context.Context, dataDir string) error {
 	if a == nil || a.localDirMap == nil || a.BaseURL == "" {
 		return nil
@@ -208,7 +194,6 @@ func (a *BotAPI) ProbeLocalDirMap(ctx context.Context, dataDir string) error {
 	return nil
 }
 
-// NewBotAPI wraps an initialised bot.
 func NewBotAPI(b *bot.Bot, token string) *BotAPI {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 0
@@ -315,7 +300,6 @@ func (a *BotAPI) Answer(ctx context.Context, id, text string, alert bool) error 
 	return mapErr(err)
 }
 
-// progressReader counts bytes as the HTTP client streams the multipart body.
 type progressReader struct {
 	f     *os.File
 	total int64
@@ -735,7 +719,7 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 	case KindPhoto:
 		method = "sendPhoto"
 		fieldName = "photo"
-	default: // KindDocument
+	default:
 		method = "sendDocument"
 		fieldName = "document"
 		fields["disable_content_type_detection"] = "true"
@@ -876,10 +860,8 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 	return a.postMultipart(ctx, "sendMediaGroup", fields, files, nil)
 }
 
-// SetDataDir sets the configured Bot API data directory for local file cleanup.
 func (a *BotAPI) SetDataDir(dir string) { a.dataDir = dir }
 
-// IsInsideDir reports whether path is inside dir without escaping.
 func IsInsideDir(path, dir string) bool {
 	if dir == "" || path == "" || !filepath.IsAbs(path) {
 		return false
@@ -893,9 +875,6 @@ func IsInsideDir(path, dir string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// Download fetches a Telegram file into destDir. Against a --local Bot API
-// server getFile returns an absolute path on the server's disk; when that path
-// is visible to us the file is moved/copied instead of re-downloaded.
 func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb ProgressFunc) (string, error) {
 	info, err := a.B.GetFile(ctx, &bot.GetFileParams{FileID: f.FileID})
 	if err != nil {
@@ -916,7 +895,7 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 
 	inDataDir := IsInsideDir(info.FilePath, a.dataDir)
 	if filepath.IsAbs(info.FilePath) && inDataDir {
-		// Copy instead of rename so a second getFile of the same file_id succeeds.
+
 		if err := copyFile(info.FilePath, dest); err == nil {
 			if cb != nil {
 				cb(total, total)
@@ -1024,5 +1003,17 @@ func (a *BotAPI) SetCommands(ctx context.Context, cmds []Command) error {
 		bc[i] = models.BotCommand{Command: c.Name, Description: c.Description}
 	}
 	_, err := a.B.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: bc})
+	return mapErr(err)
+}
+
+func (a *BotAPI) SetChatCommands(ctx context.Context, chatID int64, cmds []Command) error {
+	bc := make([]models.BotCommand, len(cmds))
+	for i, c := range cmds {
+		bc[i] = models.BotCommand{Command: c.Name, Description: c.Description}
+	}
+	_, err := a.B.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+		Commands: bc,
+		Scope:    &models.BotCommandScopeChat{ChatID: chatID},
+	})
 	return mapErr(err)
 }

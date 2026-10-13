@@ -27,7 +27,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/pacing"
 )
 
-// Progress is reported on every poll of an aria2 download.
 type Progress struct {
 	Pct        float64
 	Completed  int64
@@ -37,10 +36,8 @@ type Progress struct {
 	Name       string
 }
 
-// ProgressFunc receives aria2 progress.
 type ProgressFunc func(Progress)
 
-// Aria2 manages a single local aria2c RPC daemon.
 type Aria2 struct {
 	cfg      *config.Config
 	trackers *Trackers
@@ -73,8 +70,18 @@ func speedOpt(limit string) string {
 	return limit
 }
 
-// Start launches the daemon (idempotent). If aria2c is missing it logs a
-// warning and returns nil so the rest of the bot keeps working.
+func (a *Aria2) ChangeGlobalSpeedLimit(ctx context.Context, limit string) error {
+	a.mu.Lock()
+	port := a.port
+	alive := a.cmd != nil && a.alive()
+	a.mu.Unlock()
+	if !alive {
+		return nil
+	}
+	_, err := a.call(ctx, port, "aria2.changeGlobalOption", map[string]any{"max-overall-download-limit": speedOpt(limit)})
+	return err
+}
+
 func (a *Aria2) Start(ctx context.Context) error {
 	a.mu.Lock()
 	if a.cmd != nil && a.alive() {
@@ -149,7 +156,6 @@ func (a *Aria2) Start(ctx context.Context) error {
 	a.mu.Unlock()
 	slog.Info("aria2c RPC daemon started", "port", port)
 
-	// Wait until the RPC endpoint answers.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := a.call(ctx, port, "aria2.getVersion", nil); err == nil {
@@ -175,7 +181,6 @@ func (a *Aria2) alive() bool {
 	}
 }
 
-// Stop shuts the daemon down gracefully, killing it after a short grace period.
 func (a *Aria2) Stop(ctx context.Context) {
 	a.mu.Lock()
 	cmd, port, exited := a.cmd, a.port, a.exited
@@ -259,14 +264,12 @@ type status struct {
 
 func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 
-// Handle lets the queue manager cancel an in-flight aria2 download.
 type Handle struct {
 	a   *Aria2
 	gid string
 	mu  sync.Mutex
 }
 
-// Kill force-removes the active GID.
 func (h *Handle) Kill() {
 	h.mu.Lock()
 	gid := h.gid
@@ -281,8 +284,6 @@ func (h *Handle) Kill() {
 	}
 }
 
-// Download fetches HTTP/FTP/magnet/torrent targets via the daemon and blocks
-// until completion, failure, or ctx cancellation.
 func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[string]any, onProgress ProgressFunc) dl.Result {
 	if err := a.Start(ctx); err != nil {
 		return dl.Result{ErrorTail: "aria2c RPC daemon is not running: " + err.Error()}
@@ -341,7 +342,6 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		_, _ = a.call(c, port, "aria2.removeDownloadResult", g)
 	}()
 
-	// Cancellation: force-remove the GID when ctx ends.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -376,7 +376,7 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		if err := json.Unmarshal(res, &st); err != nil {
 			continue
 		}
-		if len(st.FollowedBy) > 0 { // metadata download handed off to the real transfer
+		if len(st.FollowedBy) > 0 {
 			h.mu.Lock()
 			h.gid = st.FollowedBy[0]
 			h.mu.Unlock()

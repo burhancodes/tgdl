@@ -3,10 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -102,9 +104,12 @@ type Config struct {
 
 	RenameMaxBatch   int
 	RenameSessionTTL time.Duration
-}
 
-const defaultOwnerID int64 = 1623457379
+	SettingsWriteEnv      bool
+	SettingsEncryptionKey string
+	LogLevelVar           *slog.LevelVar
+	mu                    sync.RWMutex
+}
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -188,6 +193,10 @@ func Load() (*Config, error) {
 
 		RenameMaxBatch:   max(1, envInt("RENAME_MAX_BATCH", 200)),
 		RenameSessionTTL: envDuration("RENAME_SESSION_TTL", 30*time.Minute),
+
+		SettingsWriteEnv:      envBool("SETTINGS_WRITE_ENV", false),
+		SettingsEncryptionKey: envStr("SETTINGS_ENCRYPTION_KEY", ""),
+		LogLevelVar:           &slog.LevelVar{},
 	}
 
 	if c.BotAPILocalDirMap != "" {
@@ -199,13 +208,21 @@ func Load() (*Config, error) {
 		c.LocalContainerPrefix = cont
 	}
 
-	if raw, ok := os.LookupEnv("OWNER_ID"); !ok {
-		c.OwnerID, c.HasOwner = defaultOwnerID, true
-	} else if id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
-		c.OwnerID, c.HasOwner = id, true
-	}
-
 	c.AuthorizedIDs = parseIDList(os.Getenv("AUTHORIZED_USER_IDS"))
+
+	if raw, ok := os.LookupEnv("OWNER_ID"); ok && strings.TrimSpace(raw) != "" {
+		if id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && id != 0 {
+			c.OwnerID, c.HasOwner = id, true
+		}
+	}
+	if !c.HasOwner {
+		if len(c.AuthorizedIDs) > 0 {
+			c.OwnerID, c.HasOwner = c.AuthorizedIDs[0], true
+		} else {
+			c.OwnerID, c.HasOwner = 0, false
+			slog.Warn("no owner configured: OWNER_ID is unset and AUTHORIZED_USER_IDS is empty; settings commands are disabled")
+		}
+	}
 
 	if raw := strings.TrimSpace(os.Getenv("MAX_TOTAL_DOWNLOADS_BYTES")); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)
@@ -367,4 +384,36 @@ func envBool(key string, def bool) bool {
 		return false
 	}
 	return def
+}
+
+func (c *Config) Lock()    { c.mu.Lock() }
+func (c *Config) Unlock()  { c.mu.Unlock() }
+func (c *Config) RLock()   { c.mu.RLock() }
+func (c *Config) RUnlock() { c.mu.RUnlock() }
+
+func (c *Config) GetAuthorizedIDs() []int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]int64, len(c.AuthorizedIDs))
+	copy(out, c.AuthorizedIDs)
+	return out
+}
+
+func (c *Config) SetAuthorizedIDs(ids []int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.AuthorizedIDs = make([]int64, len(ids))
+	copy(c.AuthorizedIDs, ids)
+}
+
+func (c *Config) GetGlobalSpeedLimit() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.GlobalSpeedLimit
+}
+
+func (c *Config) SetGlobalSpeedLimit(val string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.GlobalSpeedLimit = val
 }

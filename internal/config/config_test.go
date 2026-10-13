@@ -79,3 +79,41 @@ func TestParseLocalDirMap(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerResolution(t *testing.T) {
+	t.Run("explicit owner id", func(t *testing.T) {
+		t.Setenv("OWNER_ID", "555")
+		t.Setenv("AUTHORIZED_USER_IDS", "100,200")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.HasOwner || cfg.OwnerID != 555 {
+			t.Errorf("got (%v, %d); want (true, 555)", cfg.HasOwner, cfg.OwnerID)
+		}
+	})
+
+	t.Run("fallback to first authorized user", func(t *testing.T) {
+		t.Setenv("OWNER_ID", "")
+		t.Setenv("AUTHORIZED_USER_IDS", "100,200")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.HasOwner || cfg.OwnerID != 100 {
+			t.Errorf("got (%v, %d); want (true, 100)", cfg.HasOwner, cfg.OwnerID)
+		}
+	})
+
+	t.Run("no owner and no authorized", func(t *testing.T) {
+		t.Setenv("OWNER_ID", "")
+		t.Setenv("AUTHORIZED_USER_IDS", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.HasOwner || cfg.OwnerID != 0 {
+			t.Errorf("got (%v, %d); want (false, 0)", cfg.HasOwner, cfg.OwnerID)
+		}
+	})
+}

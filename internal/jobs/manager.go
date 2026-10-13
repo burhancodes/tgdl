@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/burhanverse/tgdl/internal/archive"
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/fsutil"
@@ -29,9 +27,9 @@ type Manager struct {
 	lim     *pacing.TelegramLimiter
 	up      *tgUploader
 
-	dlSem    *semaphore.Weighted
-	ulSem    *semaphore.Weighted
-	heavySem *semaphore.Weighted
+	dlSem    *ResizableSemaphore
+	ulSem    *ResizableSemaphore
+	heavySem *ResizableSemaphore
 
 	mu        sync.Mutex
 	states    map[string]*State
@@ -55,13 +53,13 @@ func NewManager(d *Deps, lim *pacing.TelegramLimiter) *Manager {
 	if d.Cfg.MaxConcurrentUL > 0 {
 		mcUL = int64(d.Cfg.MaxConcurrentUL)
 	}
-	hs := semaphore.NewWeighted(mcHeavy)
+	hs := NewResizableSemaphore(mcHeavy)
 	d.HeavySem = hs
 	return &Manager{
 		d: d, sources: DefaultSources(d), lim: lim,
 		up:       newTGUploader(d.TG, lim, d.Cfg.UploadLimit(), d.Cfg.AlbumMaxTotalBytes),
-		dlSem:    semaphore.NewWeighted(mcDL),
-		ulSem:    semaphore.NewWeighted(mcUL),
+		dlSem:    NewResizableSemaphore(mcDL),
+		ulSem:    NewResizableSemaphore(mcUL),
 		heavySem: hs,
 		states:   map[string]*State{},
 	}
@@ -881,3 +879,27 @@ func firstNonEmpty(v ...string) string {
 }
 
 var errNoPassword = errors.New("timed out waiting for archive password")
+
+func (m *Manager) SetMaxConcurrentDL(n int) {
+	if n >= 1 && m.dlSem != nil {
+		m.dlSem.Resize(int64(n))
+	}
+}
+
+func (m *Manager) SetMaxConcurrentUL(n int) {
+	if n >= 1 && m.ulSem != nil {
+		m.ulSem.Resize(int64(n))
+	}
+}
+
+func (m *Manager) SetMaxConcurrentHeavy(n int) {
+	if n >= 1 && m.heavySem != nil {
+		m.heavySem.Resize(int64(n))
+	}
+}
+
+func (m *Manager) SetAlbumMaxTotalBytes(n int64) {
+	if m.up != nil {
+		m.up.setAlbumMaxBytes(n)
+	}
+}

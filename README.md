@@ -10,6 +10,7 @@ FileDitch and Pixeldrain. Go rewrite of the Python `tgdl` project.
 cmd/tgdl            entrypoint, dependency wiring, graceful shutdown
 internal/
   config            env → typed Config (validated once)
+  settings          typed registry, runtime overrides, persistence, encryption
   store             SQLite job repository (pure-Go driver, WAL)
   tg                Telegram interface + Bot API adapter (swap MTProto in here only)
   bot               command/callback handlers (thin: parse → enqueue)
@@ -37,6 +38,12 @@ Key design changes from the Python version:
 * **Zip-slip / tar traversal protection** in extraction; passwords never echoed to chat.
 * Status card rendering is a pure function of a `Snapshot` (`internal/status`), unit-tested.
 
+## Configuration & Runtime Settings
+
+All bot configurations, environment variables, and runtime limits can be viewed and dynamically modified directly inside Telegram by the bot owner via `/settings`.
+
+For detailed information on configuration keys, precedence layers, live updates, encrypted secrets, and text commands, see [docs/settings.md](docs/settings.md).
+
 ## Telegram transport (important)
 
 The Bot API cloud limits uploads to 50 MB. For files up to ~2 GB run a self-hosted
@@ -61,6 +68,5 @@ External tools used at runtime: `ffmpeg`, `aria2c`, `7z`/`unrar`/`unzip`, `galle
 
 * The "split large file?" prompt was dropped; oversized files split automatically (video-aware,
   binary fallback), as the previous default did.
-* Pinning of the status message and the `/settings`-style split toggle are not ported.
 * Interactive multi-part archive upload sessions (`/unzip` with manually uploaded parts) are not
   ported; use a URL, or a single archive.

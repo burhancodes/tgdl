@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/jobs"
 	"github.com/burhanverse/tgdl/internal/logging"
 	"github.com/burhanverse/tgdl/internal/pacing"
+	"github.com/burhanverse/tgdl/internal/settings"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
@@ -97,11 +99,25 @@ func run() error {
 		Aria: aria,
 	}
 	mgr := jobs.NewManager(deps, lim)
+	reg := settings.NewRegistry()
+	setStore := settings.NewStore(cfg.DataDir, filepath.Join(".", ".env"), cfg.SettingsWriteEnv, cfg.SettingsEncryptionKey, reg)
+	setMgr, err := settings.NewManager(cfg, reg, setStore)
+	if err != nil {
+		slog.Warn("could not load settings manager", "err", err)
+	} else {
+		registerLiveSettingsHooks(setMgr, cfg, mgr, aria)
+	}
+
 	app = bot.New(bot.Deps{Cfg: cfg, Auth: authz, Store: st, Mgr: mgr, Keys: keys, Hosts: hosts,
-		Search: search, Lim: lim, Runner: runner}, b, api)
+		Search: search, Lim: lim, Runner: runner, SettingsMgr: setMgr}, b, api)
 
 	if err := api.SetCommands(ctx, commands()); err != nil {
 		slog.Warn("could not set bot commands", "err", err)
+	}
+	if cfg.HasOwner && cfg.OwnerID != 0 {
+		if err := api.SetChatCommands(ctx, cfg.OwnerID, ownerCommands()); err != nil {
+			slog.Debug("could not set owner bot commands", "err", err)
+		}
 	}
 
 	go search.Start(ctx)
@@ -191,4 +207,192 @@ func readCgroupMemoryLimit() int64 {
 		}
 	}
 	return 0
+}
+
+func ownerCommands() []tg.Command {
+	cmds := commands()
+	return append(cmds,
+		tg.Command{Name: "settings", Description: "Configure bot settings"},
+		tg.Command{Name: "restart", Description: "Restart bot container"},
+	)
+}
+
+func registerLiveSettingsHooks(setMgr *settings.Manager, cfg *config.Config, mgr *jobs.Manager, aria *torrent.Aria2) {
+	setMgr.RegisterHook("LOG_LEVEL", func(ctx context.Context, c *config.Config, key, val string) error {
+		var lvl slog.Level
+		switch strings.ToUpper(val) {
+		case "DEBUG":
+			lvl = slog.LevelDebug
+		case "INFO":
+			lvl = slog.LevelInfo
+		case "WARNING":
+			lvl = slog.LevelWarn
+		case "ERROR":
+			lvl = slog.LevelError
+		default:
+			return fmt.Errorf("invalid log level: %s", val)
+		}
+		c.LogLevel = val
+		if c.LogLevelVar != nil {
+			c.LogLevelVar.Set(lvl)
+		}
+		return nil
+	})
+	setMgr.RegisterHook("TG_MAX_CONCURRENT_DOWNLOADS", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.MaxConcurrentDL = n
+		mgr.SetMaxConcurrentDL(n)
+		return nil
+	})
+	setMgr.RegisterHook("TG_MAX_CONCURRENT_UPLOADS", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.MaxConcurrentUL = n
+		mgr.SetMaxConcurrentUL(n)
+		return nil
+	})
+	setMgr.RegisterHook("TG_MAX_CONCURRENT_HEAVY", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.MaxConcurrentHeavy = n
+		mgr.SetMaxConcurrentHeavy(n)
+		return nil
+	})
+	setMgr.RegisterHook("TG_ALBUM_MAX_BYTES", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBytes(val)
+		if err != nil || b < 1 {
+			return errors.New("invalid album max bytes")
+		}
+		c.AlbumMaxTotalBytes = b
+		mgr.SetAlbumMaxTotalBytes(b)
+		return nil
+	})
+	setMgr.RegisterHook("GLOBAL_DOWNLOAD_SPEED_LIMIT", func(ctx context.Context, c *config.Config, key, val string) error {
+		c.SetGlobalSpeedLimit(val)
+		if aria != nil {
+			return aria.ChangeGlobalSpeedLimit(ctx, val)
+		}
+		return nil
+	})
+	setMgr.RegisterHook("AUTHORIZED_USER_IDS", func(ctx context.Context, c *config.Config, key, val string) error {
+		ids, err := settings.ParseIDList(val)
+		if err != nil {
+			return err
+		}
+		c.SetAuthorizedIDs(ids)
+		return nil
+	})
+	setMgr.RegisterHook("PIN_STATUS_MESSAGE", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		c.PinStatusMessage = b
+		return nil
+	})
+	setMgr.RegisterHook("MIN_FREE_DISK_BYTES", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBytes(val)
+		if err != nil || b < 0 {
+			return errors.New("invalid min free disk bytes")
+		}
+		c.MinFreeDiskBytes = b
+		return nil
+	})
+	setMgr.RegisterHook("MAX_TOTAL_DOWNLOADS_BYTES", func(ctx context.Context, c *config.Config, key, val string) error {
+		if strings.TrimSpace(val) == "" {
+			c.HasMaxTotalDownloads = false
+			c.MaxTotalDownloadsB = 0
+			return nil
+		}
+		b, err := settings.ParseBytes(val)
+		if err != nil || b < 0 {
+			return errors.New("invalid max total downloads bytes")
+		}
+		c.MaxTotalDownloadsB = b
+		c.HasMaxTotalDownloads = true
+		return nil
+	})
+	setMgr.RegisterHook("MAX_JOBS_PER_CHAT", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.MaxJobsPerChat = n
+		return nil
+	})
+	setMgr.RegisterHook("MAX_EXTRACT_BYTES", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBytes(val)
+		if err != nil || b < 0 {
+			return errors.New("invalid max extract bytes")
+		}
+		c.MaxExtractBytes = b
+		return nil
+	})
+	setMgr.RegisterHook("MAX_EXTRACT_FILES", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.MaxExtractFiles = n
+		return nil
+	})
+	setMgr.RegisterHook("SEARCH_LIMIT", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.SearchLimit = n
+		return nil
+	})
+	setMgr.RegisterHook("PIXELDRAIN_API_KEY", func(ctx context.Context, c *config.Config, key, val string) error {
+		c.PixeldrainAPIKey = val
+		return nil
+	})
+	setMgr.RegisterHook("PIXELDRAIN_DOMAIN", func(ctx context.Context, c *config.Config, key, val string) error {
+		c.PixeldrainDomain = val
+		return nil
+	})
+	setMgr.RegisterHook("GOFILE_API_KEY", func(ctx context.Context, c *config.Config, key, val string) error {
+		c.GofileAPIKey = val
+		return nil
+	})
+	setMgr.RegisterHook("ALLOW_SHARED_UPLOAD_KEYS", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		c.AllowSharedKeys = b
+		return nil
+	})
+	setMgr.RegisterHook("ALLOW_PRIVATE_NETWORK_URLS", func(ctx context.Context, c *config.Config, key, val string) error {
+		b, err := settings.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		c.AllowPrivateURLs = b
+		return nil
+	})
+	setMgr.RegisterHook("RENAME_MAX_BATCH", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return errors.New("must be >= 1")
+		}
+		c.RenameMaxBatch = n
+		return nil
+	})
+	setMgr.RegisterHook("RENAME_SESSION_TTL", func(ctx context.Context, c *config.Config, key, val string) error {
+		d, err := settings.ParseDuration(val)
+		if err != nil {
+			return err
+		}
+		c.RenameSessionTTL = d
+		return nil
+	})
 }

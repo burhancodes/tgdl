@@ -20,7 +20,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 )
 
-// ErrTooLarge is returned for files above the upload limit.
 var ErrTooLarge = errors.New("file exceeds the Telegram upload limit")
 
 var (
@@ -28,7 +27,6 @@ var (
 	groupKeyRE   = regexp.MustCompile(`(?i)^(.+?)(?:(?:_part|\.part)\d+\.[^.]+$|\.0*\d+$)`)
 )
 
-// tgUploader sends files to Telegram with pacing, retries and format fallbacks.
 type tgUploader struct {
 	tg            tg.Client
 	lim           *pacing.TelegramLimiter
@@ -55,6 +53,20 @@ func (u *tgUploader) bump(delta float64) {
 
 func (u *tgUploader) mult() float64 { u.mu.Lock(); defer u.mu.Unlock(); return u.multiplier }
 
+func (u *tgUploader) setAlbumMaxBytes(b int64) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if b > 0 {
+		u.albumMaxBytes = b
+	}
+}
+
+func (u *tgUploader) getAlbumMaxBytes() int64 {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.albumMaxBytes
+}
+
 func caption(path string) string {
 	name := filepath.Base(path)
 	suffix := filepath.Ext(name)
@@ -70,11 +82,8 @@ func caption(path string) string {
 	return "<code>" + status.Esc(display) + "</code>"
 }
 
-// UploadResult reports whether the doc-mode fallback was engaged.
 type UploadResult struct{ AsDoc bool }
 
-// Upload sends one file. progress may be nil. It returns the (possibly
-// updated) as-document preference so callers can stick to it for the batch.
 func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDoc bool, progress tg.ProgressFunc) (bool, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -121,7 +130,7 @@ func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDo
 		}
 		lastErr = err
 		if _, bad := tg.IsBadRequest(err); bad {
-			break // uploadOnce already retried as document
+			break
 		}
 		slog.Warn("upload attempt failed", "file", filepath.Base(path), "attempt", attempt+1, "err", err)
 	}
@@ -134,7 +143,7 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 	isVideo, isAudio := media.VideoExt[ext], media.AudioExt[ext]
 	isImage := media.ImageExt[ext] && !media.ConvertibleImage[ext]
 	if ext == ".gif" {
-		force = true // sendPhoto would flatten the animation
+		force = true
 	}
 	if isImage && !force && media.PhotoInvalidForTelegram(ctx, path) {
 		slog.Info("image unsuited for photo API; sending as document", "file", filepath.Base(path))
@@ -246,7 +255,6 @@ func (u *tgUploader) sendScreenshots(ctx context.Context, chatID int64, path str
 	u.lim.RecordUploadDone(chatID)
 }
 
-// SplitGroupKey returns the base name when path is one part of a split set.
 func SplitGroupKey(name string) (string, bool) {
 	m := groupKeyRE.FindStringSubmatch(name)
 	if m == nil {
@@ -255,11 +263,6 @@ func SplitGroupKey(name string) (string, bool) {
 	return m[1], true
 }
 
-// PlanAlbumBatches splits a list of file sizes into batches for upload.
-// An album batch requires 2 to 10 items whose combined size does NOT exceed maxTotalBytes,
-// with every file individually <= maxTotalBytes.
-// Any file that cannot form a valid album batch (e.g. size > maxTotalBytes,
-// or only 1 file remaining) is returned as a single-item batch (len == 1).
 func PlanAlbumBatches(sizes []int64, maxTotalBytes int64) [][]int {
 	var batches [][]int
 	n := len(sizes)
@@ -300,9 +303,6 @@ func PlanAlbumBatches(sizes []int64, maxTotalBytes int64) [][]int {
 	return batches
 }
 
-// UploadGroup sends files as albums when the combined size is small (<= albumMaxBytes)
-// and each file is individually small, falling back to single-file uploads otherwise.
-// onUploaded is called for each file that succeeds.
 func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []string, asDoc bool, progress tg.ProgressFunc, onUploaded ...func(path string)) (bool, error) {
 	var notifySuccess func(string)
 	if len(onUploaded) > 0 && onUploaded[0] != nil {
@@ -320,7 +320,7 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 		sizes[i] = st.Size()
 	}
 
-	plan := PlanAlbumBatches(sizes, u.albumMaxBytes)
+	plan := PlanAlbumBatches(sizes, u.getAlbumMaxBytes())
 	for _, batchIndices := range plan {
 		if len(batchIndices) == 1 {
 			f := files[batchIndices[0]]

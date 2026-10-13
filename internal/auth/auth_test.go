@@ -33,6 +33,9 @@ func TestIsOwner(t *testing.T) {
 	t.Run("explicit owner", func(t *testing.T) {
 		cfg := &config.Config{OwnerID: 999, HasOwner: true, AuthorizedIDs: []int64{100, 200}}
 		a := New(cfg)
+		if !a.HasOwner() {
+			t.Errorf("expected HasOwner to be true")
+		}
 		if !a.IsOwner(999) {
 			t.Errorf("expected 999 to be owner")
 		}
@@ -47,6 +50,9 @@ func TestIsOwner(t *testing.T) {
 	t.Run("first authorized user fallback", func(t *testing.T) {
 		cfg := &config.Config{HasOwner: false, AuthorizedIDs: []int64{100, 200}}
 		a := New(cfg)
+		if !a.HasOwner() {
+			t.Errorf("expected HasOwner to be true")
+		}
 		if !a.IsOwner(100) {
 			t.Errorf("expected 100 to be fallback owner")
 		}
@@ -58,6 +64,9 @@ func TestIsOwner(t *testing.T) {
 	t.Run("no owner and no authorized", func(t *testing.T) {
 		cfg := &config.Config{HasOwner: false, AuthorizedIDs: nil}
 		a := New(cfg)
+		if a.HasOwner() {
+			t.Errorf("expected HasOwner to be false")
+		}
 		if a.IsOwner(100) {
 			t.Errorf("expected no owner when none set")
 		}

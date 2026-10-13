@@ -1,4 +1,3 @@
-// Package logging configures the process-wide structured logger.
 package logging
 
 import (
@@ -12,7 +11,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/config"
 )
 
-// rotator is a minimal size-based rotating file writer (10MB x 5 backups).
 type rotator struct {
 	path string
 	max  int64
@@ -70,7 +68,6 @@ func itoa(i int) string {
 	return string(b[pos:])
 }
 
-// Setup installs the default slog logger and returns a closer for the file sink.
 func Setup(cfg *config.Config) func() {
 	level := slog.LevelInfo
 	switch cfg.LogLevel {
@@ -82,6 +79,11 @@ func Setup(cfg *config.Config) func() {
 		level = slog.LevelError
 	}
 
+	if cfg.LogLevelVar == nil {
+		cfg.LogLevelVar = &slog.LevelVar{}
+	}
+	cfg.LogLevelVar.Set(level)
+
 	var w io.Writer = os.Stderr
 	closer := func() {}
 	if r, err := newRotator(filepath.Join(cfg.LogDir, "bot.log"), 10_000_000, 5); err == nil {
@@ -91,7 +93,7 @@ func Setup(cfg *config.Config) func() {
 		slog.Warn("file logging unavailable, using console only", "err", err)
 	}
 
-	opts := &slog.HandlerOptions{Level: level, AddSource: cfg.LogLevel == "DEBUG"}
+	opts := &slog.HandlerOptions{Level: cfg.LogLevelVar, AddSource: cfg.LogLevel == "DEBUG"}
 	var h slog.Handler
 	if cfg.LogFormat == "json" {
 		h = slog.NewJSONHandler(w, opts)
@@ -102,9 +104,6 @@ func Setup(cfg *config.Config) func() {
 	return closer
 }
 
-// TruncateLogFile checks the file at path and, if it exceeds maxSize, rotates it
-// by rename to path+".1" to avoid sparse file creation in processes (like aria2)
-// that hold open file descriptors.
 func TruncateLogFile(path string, maxSize int64) {
 	st, err := os.Stat(path)
 	if err != nil || st.Size() <= maxSize {
@@ -115,7 +114,6 @@ func TruncateLogFile(path string, maxSize int64) {
 	_ = os.Rename(path, rotated)
 }
 
-// StartLogTruncator runs TruncateLogFile on startup and every hour in a background goroutine.
 func StartLogTruncator(ctx context.Context, logDir string, maxSize int64, filenames ...string) {
 	check := func() {
 		for _, fn := range filenames {

@@ -39,6 +39,17 @@ var helpPages = map[string]string{
 		"• Options: <code>--start N</code>, <code>--step N</code>, <code>--sort name|time|size|sent</code>, <code>--on-conflict suffix|skip|error</code>, <code>--doc</code>\n" +
 		"• Schemes: <code>{n:3} - {name}.{ext}</code>, <code>{name|slug}.{ext}</code>, <code>{date:2006-01-02}_{name}.{ext}</code>\n" +
 		"• Presets: <code>sequence</code>, <code>clean</code>, <code>date-prefix</code>, <code>tv</code>",
+	"settings": "<b>Owner Settings</b>\n" +
+		"Owner-only configuration management inside Telegram:\n" +
+		"• <code>/settings</code> — open interactive settings dashboard\n" +
+		"• <code>/set &lt;KEY&gt; &lt;value&gt;</code> — change setting live\n" +
+		"• <code>/get &lt;KEY&gt;</code> — view setting value and details\n" +
+		"• <code>/unset &lt;KEY&gt;</code> — revert override to default/env\n" +
+		"• <code>/settings changed</code> — view all active overrides\n" +
+		"• <code>/settings history</code> — view change history and undo\n" +
+		"• <code>/settings export</code> — export JSON with secrets redacted\n" +
+		"• <code>/settings import</code> — import JSON with diff confirmation\n" +
+		"• <code>/restart</code> — cleanly restart bot container",
 }
 
 func helpPage(page string) (string, tg.Keyboard) {
@@ -51,6 +62,7 @@ func helpPage(page string) (string, tg.Keyboard) {
 		{b("Downloads", "dl"), b("Torrents", "tor")},
 		{b("Archives", "unzip"), b("Cloud", "cloud")},
 		{b("Rename", "rename"), b("Cookies", "cookies")},
+		{b("Settings", "settings")},
 	}
 	if page != "main" {
 		kb = append(kb, []tg.Button{b("Back", "main")})

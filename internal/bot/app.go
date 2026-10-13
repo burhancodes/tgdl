@@ -17,6 +17,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/jobs"
 	"github.com/burhanverse/tgdl/internal/pacing"
+	"github.com/burhanverse/tgdl/internal/settings"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/telegraph"
@@ -42,19 +43,22 @@ type App struct {
 	hostUploadSem  *semaphore.Weighted
 	botID          int64
 	renameSessions *RenameSessionManager
+	settingsMgr    *settings.Manager
+	settingsUI     *SettingsUI
 }
 
 type Deps struct {
-	Cfg       *config.Config
-	Auth      *auth.Authorizer
-	Store     *store.Store
-	Mgr       *jobs.Manager
-	Keys      *upload.Keys
-	Hosts     *upload.Hosts
-	Search    *torrent.Magnetio
-	Lim       *pacing.TelegramLimiter
-	Runner    *dl.Runner
-	Telegraph *telegraph.Helper
+	Cfg         *config.Config
+	Auth        *auth.Authorizer
+	Store       *store.Store
+	Mgr         *jobs.Manager
+	Keys        *upload.Keys
+	Hosts       *upload.Hosts
+	Search      *torrent.Magnetio
+	Lim         *pacing.TelegramLimiter
+	Runner      *dl.Runner
+	Telegraph   *telegraph.Helper
+	SettingsMgr *settings.Manager
 }
 
 func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
@@ -72,10 +76,15 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 			botID, _ = strconv.ParseInt(parts[0], 10, 64)
 		}
 	}
+	var setUI *SettingsUI
+	if d.SettingsMgr != nil {
+		setUI = NewSettingsUI(d.SettingsMgr)
+	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
 		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele,
 		hostUploadSem: semaphore.NewWeighted(semLimit), botID: botID,
-		renameSessions: NewRenameSessionManager(d.Cfg, api)}
+		renameSessions: NewRenameSessionManager(d.Cfg, api),
+		settingsMgr:    d.SettingsMgr, settingsUI: setUI}
 	a.register(b)
 	return a
 }
@@ -204,6 +213,11 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"cookies"}, a.cmdCookies)
 	cmd([]string{"gdlconf"}, a.cmdGDLConf)
 	cmd([]string{"rename"}, a.cmdRename)
+	cmd([]string{"settings"}, a.cmdSettings)
+	cmd([]string{"set"}, a.cmdSet)
+	cmd([]string{"get"}, a.cmdGet)
+	cmd([]string{"unset"}, a.cmdUnset)
+	cmd([]string{"restart"}, a.cmdRestart)
 
 	cb := func(prefix string, h tgbot.HandlerFunc) {
 		b.RegisterHandler(tgbot.HandlerTypeCallbackQueryData, prefix, tgbot.MatchTypePrefix, h)
@@ -214,12 +228,18 @@ func (a *App) register(b *tgbot.Bot) {
 	cb("help_page:", a.cbHelp)
 	cb("status:", a.cbStatus)
 	cb("rename:", a.cbRename)
+	cb("set:", a.cbSettings)
 }
 
 func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	m := u.Message
 	if m == nil {
 		return
+	}
+	if a.settingsUI != nil && m.Chat.Type == "private" && m.Text != "" {
+		if a.handleSettingsInput(ctx, b, m) {
+			return
+		}
 	}
 	if m.PinnedMessage != nil {
 		isBotPin := false
