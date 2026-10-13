@@ -1,8 +1,12 @@
 package bot
 
 import (
+	"context"
 	"reflect"
 	"testing"
+
+	"github.com/burhanverse/tgdl/internal/tg"
+	"github.com/go-telegram/bot/models"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -102,5 +106,56 @@ func TestURLsFromText(t *testing.T) {
 	}
 	if !reflect.DeepEqual(urls, expected) {
 		t.Errorf("urlsFromText: got %v, want %v", urls, expected)
+	}
+}
+
+type mockBotTGClient struct {
+	tg.Client
+	deleted []tg.MessageRef
+}
+
+func (m *mockBotTGClient) Delete(ctx context.Context, ref tg.MessageRef) error {
+	m.deleted = append(m.deleted, ref)
+	return nil
+}
+
+func TestDefault_PinnedServiceMessageDeletion(t *testing.T) {
+	tgMock := &mockBotTGClient{}
+	app := &App{
+		tg:    tgMock,
+		botID: 12345,
+	}
+
+	// 1. Service message for pinned message by the bot itself
+	updateBotPin := &models.Update{
+		Message: &models.Message{
+			ID:   100,
+			Chat: models.Chat{ID: 999},
+			From: &models.User{ID: 12345, IsBot: true},
+			PinnedMessage: &models.MaybeInaccessibleMessage{
+				Message: &models.Message{ID: 50, From: &models.User{ID: 12345}},
+			},
+		},
+	}
+	app.Default(context.Background(), nil, updateBotPin)
+	if len(tgMock.deleted) != 1 || tgMock.deleted[0].ID != 100 {
+		t.Fatalf("expected bot's pinned service message to be deleted, got: %+v", tgMock.deleted)
+	}
+
+	// 2. Service message for pinned message by another user
+	tgMock.deleted = nil
+	updateUserPin := &models.Update{
+		Message: &models.Message{
+			ID:   101,
+			Chat: models.Chat{ID: 999},
+			From: &models.User{ID: 88888, IsBot: false},
+			PinnedMessage: &models.MaybeInaccessibleMessage{
+				Message: &models.Message{ID: 60, From: &models.User{ID: 88888}},
+			},
+		},
+	}
+	app.Default(context.Background(), nil, updateUserPin)
+	if len(tgMock.deleted) != 0 {
+		t.Fatalf("expected user's pinned service message NOT to be deleted, got: %+v", tgMock.deleted)
 	}
 }

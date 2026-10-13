@@ -305,6 +305,24 @@ func (m *Manager) DeliverPassword(chatID int64, replyToMsgID int, password strin
 	return false
 }
 
+// IsStatusMessage reports whether msgID in chatID is an active status message for any running job.
+func (m *Manager) IsStatusMessage(chatID int64, msgID int) bool {
+	if msgID == 0 {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, st := range m.states {
+		st.mu.Lock()
+		ref := st.msg
+		st.mu.Unlock()
+		if ref.ChatID == chatID && ref.ID == msgID {
+			return true
+		}
+	}
+	return false
+}
+
 // ---- job lifecycle -----------------------------------------------------------
 
 func (m *Manager) run(id string) {
@@ -373,6 +391,15 @@ func (m *Manager) ensureStatusMessage(st *State) {
 	st.msg = ref
 	st.mu.Unlock()
 	_ = m.d.Store.SetStatusMessage(context.Background(), job.ID, ref.ID)
+	if m.d.Cfg == nil || m.d.Cfg.PinStatusMessage {
+		ctx := st.ctx
+		if ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		if err := m.d.TG.Pin(ctx, ref); err != nil {
+			slog.Debug("pin status message failed", "job", job.ID, "err", err)
+		}
+	}
 }
 
 func cancelKeyboard(jobID string) tg.Keyboard {
@@ -811,6 +838,11 @@ func (m *Manager) finalize(st *State) {
 		}
 		if err != nil {
 			m.send(st, text, tg.SendOpts{})
+		}
+		if m.d.Cfg == nil || m.d.Cfg.PinStatusMessage {
+			if err := m.d.TG.Unpin(ctx, ref); err != nil {
+				slog.Debug("unpin status message failed", "job", job.ID, "err", err)
+			}
 		}
 	} else {
 		m.send(st, text, tg.SendOpts{})

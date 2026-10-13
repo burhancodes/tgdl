@@ -154,12 +154,16 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 				up.Thumb = media.VideoThumbnail(ctx, path, 0)
 			} else if media.ImageExt[ext] {
 				up.Thumb = media.ImageThumbnail(ctx, path)
+			} else if ext == ".pdf" {
+				up.Thumb = media.PDFThumbnail(ctx, path)
 			}
 		case isVideo:
 			vi := media.ProbeVideo(ctx, path)
 			up.Kind, up.Duration, up.Width, up.Height = tg.KindVideo, vi.Duration, vi.Width, vi.Height
 			if vi.Decodable {
 				up.Thumb = media.VideoThumbnail(ctx, path, vi.Duration)
+			} else {
+				up.Thumb = media.VideoThumbnail(ctx, path, 0)
 			}
 		case isAudio:
 			ai := media.ProbeAudio(ctx, path)

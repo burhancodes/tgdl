@@ -124,6 +124,8 @@ type Config struct {
 
 	LogLevel  string
 	LogFormat string
+
+	PinStatusMessage bool
 }
 
 const defaultOwnerID int64 = 1623457379
@@ -213,6 +215,8 @@ func Load() (*Config, error) {
 
 		LogLevel:  strings.ToUpper(envStr("LOG_LEVEL", "INFO")),
 		LogFormat: strings.ToLower(envStr("LOG_FORMAT", "text")),
+
+		PinStatusMessage: envBool("PIN_STATUS_MESSAGE", true),
 	}
 
 	if c.BotAPILocalDirMap != "" {

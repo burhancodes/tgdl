@@ -42,6 +42,7 @@ type App struct {
 	runner        *dl.Runner
 	telegraph     *telegraph.Helper
 	hostUploadSem *semaphore.Weighted
+	botID         int64
 }
 
 // Deps groups constructor arguments.
@@ -70,9 +71,15 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	if d.Cfg != nil && d.Cfg.MaxConcurrentDL > 0 {
 		semLimit = int64(d.Cfg.MaxConcurrentDL)
 	}
+	var botID int64
+	if d.Cfg != nil && d.Cfg.BotToken != "" {
+		if parts := strings.SplitN(d.Cfg.BotToken, ":", 2); len(parts) > 0 {
+			botID, _ = strconv.ParseInt(parts[0], 10, 64)
+		}
+	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
 		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele,
-		hostUploadSem: semaphore.NewWeighted(semLimit)}
+		hostUploadSem: semaphore.NewWeighted(semLimit), botID: botID}
 	a.register(b)
 	return a
 }
@@ -216,7 +223,28 @@ func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	if m == nil {
 		return
 	}
-	if m.PinnedMessage != nil || m.NewChatMembers != nil || m.LeftChatMember != nil {
+	if m.PinnedMessage != nil {
+		isBotPin := false
+		if a.botID != 0 {
+			if m.From != nil && m.From.ID == a.botID {
+				isBotPin = true
+			} else if m.PinnedMessage.Message != nil && m.PinnedMessage.Message.From != nil && m.PinnedMessage.Message.From.ID == a.botID {
+				isBotPin = true
+			}
+		} else if m.From != nil && m.From.IsBot {
+			isBotPin = true
+		}
+		if !isBotPin && a.mgr != nil && m.PinnedMessage.Message != nil {
+			if a.mgr.IsStatusMessage(m.Chat.ID, m.PinnedMessage.Message.ID) {
+				isBotPin = true
+			}
+		}
+		if isBotPin {
+			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID})
+		}
+		return
+	}
+	if m.NewChatMembers != nil || m.LeftChatMember != nil {
 		_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID})
 		return
 	}

@@ -203,6 +203,9 @@ func (m *Manager) afterUpload(st *State, f, rel string) {
 }
 
 func (m *Manager) logUpload(jobID, name string) {
+	if m.d.Cfg == nil || m.d.Cfg.LogDir == "" {
+		return
+	}
 	p := filepath.Join(m.d.Cfg.LogDir, "uploads.log")
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {

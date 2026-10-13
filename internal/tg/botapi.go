@@ -36,6 +36,8 @@ type BotAPI struct {
 	uploadClient *http.Client
 	localDirMap  *LocalDirMap
 	dataDir      string
+
+	serverVersion float64
 }
 
 // LocalDirMap translates local host file paths to paths visible by a local
@@ -119,6 +121,27 @@ func (a *BotAPI) SetLocalDirMapRaw(raw string) error {
 	}
 	a.SetLocalDirMap(h, c)
 	return nil
+}
+
+// SetServerVersion overrides the Bot API server version.
+func (a *BotAPI) SetServerVersion(v float64) {
+	if a != nil {
+		a.serverVersion = v
+	}
+}
+
+// ServerVersion returns the detected or configured Bot API server version.
+// Defaults to 9.0 (cloud and modern local Bot API).
+func (a *BotAPI) ServerVersion() float64 {
+	if a != nil && a.serverVersion > 0 {
+		return a.serverVersion
+	}
+	if v := os.Getenv("TG_BOT_API_VERSION"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return 9.0
 }
 
 // ProbeLocalDirMap verifies that the local telegram-bot-api server can access files
@@ -511,6 +534,19 @@ func (a *BotAPI) postMultipartInternal(ctx context.Context, method string, field
 		if (apiResp.ErrorCode == http.StatusBadRequest || resp.StatusCode == http.StatusBadRequest ||
 			strings.Contains(strings.ToLower(apiResp.Description), "bad request")) && !isRetry {
 			desc := strings.ToLower(apiResp.Description)
+			if strings.Contains(desc, "cover") {
+				if _, hasCover := fields["cover"]; hasCover {
+					a.SetServerVersion(8.0)
+					delete(fields, "cover")
+					var filteredFiles []filePart
+					for _, f := range files {
+						if f.fieldName != "cover" {
+							filteredFiles = append(filteredFiles, f)
+						}
+					}
+					return a.postMultipartInternal(ctx, method, fields, filteredFiles, out, true)
+				}
+			}
 			if strings.Contains(desc, "file") || strings.Contains(desc, "not found") ||
 				strings.Contains(desc, "permission") || strings.Contains(desc, "wrong file") {
 				if fallbackFiles, fallbackFields, ok := a.convertFileURIsToMultipart(method, fields); ok {
@@ -728,25 +764,36 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 	}
 
 	if u.Thumb != "" && u.Kind != KindPhoto {
-		if thumbURL, ok := a.localDirMap.FileURL(u.Thumb); ok {
-			fields["thumbnail"] = thumbURL
-		} else {
-			tf, err := os.Open(u.Thumb)
-			if err == nil {
-				tst, err := tf.Stat()
-				if err == nil {
-					filesToClose = append(filesToClose, tf)
-					fields["thumbnail"] = "attach://thumb"
-					files = append(files, filePart{
-						fieldName: "thumb",
-						fileName:  filepath.Base(u.Thumb),
-						reader:    tf,
-						size:      tst.Size(),
-					})
-				} else {
-					_ = tf.Close()
+		tf, err := os.Open(u.Thumb)
+		if err == nil {
+			tst, err := tf.Stat()
+			if err == nil && tst.Size() > 0 {
+				filesToClose = append(filesToClose, tf)
+				fields["thumbnail"] = "attach://thumb"
+				files = append(files, filePart{
+					fieldName: "thumb",
+					fileName:  filepath.Base(u.Thumb),
+					reader:    tf,
+					size:      tst.Size(),
+				})
+				if u.Kind == KindVideo && a.ServerVersion() >= 9.0 {
+					cf, err := os.Open(u.Thumb)
+					if err == nil {
+						filesToClose = append(filesToClose, cf)
+						fields["cover"] = "attach://cover"
+						files = append(files, filePart{
+							fieldName: "cover",
+							fileName:  filepath.Base(u.Thumb),
+							reader:    cf,
+							size:      tst.Size(),
+						})
+					}
 				}
+			} else {
+				_ = tf.Close()
 			}
+		} else {
+			slog.Warn("could not open thumbnail file", "thumb", u.Thumb, "err", err)
 		}
 	}
 

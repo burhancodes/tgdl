@@ -88,6 +88,7 @@ Configure access control and security policies in `.env`:
 - `TG_ALBUM_MAX_BYTES`: Maximum combined size of a batch to send as an album (default `67108864` = 64 MiB). Batches exceeding this threshold are split or sent individually.
 - `TG_UPLOAD_DELAY_MIN` / `TG_UPLOAD_DELAY_MAX`: Random delay range between individual file uploads.
 - `TG_BATCH_SIZE`: Number of files uploaded before triggering `TG_BATCH_COOLDOWN_S`.
+- `PIN_STATUS_MESSAGE`: Automatically pin active job status cards in chat, and unpin upon completion/failure/cancellation (default `true`).
 
 ---
 

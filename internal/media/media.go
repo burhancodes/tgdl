@@ -211,8 +211,11 @@ func SetTempDir(dir string) { TempDir = dir }
 
 func tempJPG(stem string) (string, error) {
 	dir := TempDir
-	if dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
 	}
 	f, err := os.CreateTemp(dir, stem+"_*.jpg")
 	if err != nil {
@@ -228,10 +231,18 @@ func tempJPG(stem string) (string, error) {
 func ImageThumbnail(ctx context.Context, path string) string {
 	out, err := tempJPG("thumb")
 	if err != nil {
+		slog.Warn("image thumbnail failed: temp file error", "file", filepath.Base(path), "err", err)
 		return ""
 	}
 	if _, err := run(ctx, "ffmpeg", "-y", "-loglevel", "error", "-i", path, "-frames:v", "1",
 		"-vf", "scale='min(320,iw)':'min(320,ih)':force_original_aspect_ratio=decrease", "-q:v", "4", out); err != nil {
+		slog.Warn("image thumbnail generation failed", "file", filepath.Base(path), "err", err)
+		_ = os.Remove(out)
+		return ""
+	}
+	st, err := os.Stat(out)
+	if err != nil || st.Size() == 0 {
+		slog.Warn("image thumbnail generated empty or missing file", "file", filepath.Base(path))
 		_ = os.Remove(out)
 		return ""
 	}
@@ -242,6 +253,7 @@ func ImageThumbnail(ctx context.Context, path string) string {
 func VideoThumbnail(ctx context.Context, path string, duration int) string {
 	out, err := tempJPG("vthumb")
 	if err != nil {
+		slog.Warn("video thumbnail failed: temp file error", "file", filepath.Base(path), "err", err)
 		return ""
 	}
 	ts := "1"
@@ -250,12 +262,44 @@ func VideoThumbnail(ctx context.Context, path string, duration int) string {
 	}
 	if _, err := run(ctx, "ffmpeg", "-y", "-loglevel", "error", "-ss", ts, "-i", path, "-frames:v", "1",
 		"-vf", "scale='min(320,iw)':'min(320,ih)':force_original_aspect_ratio=decrease", "-q:v", "4", out); err != nil {
+		slog.Warn("video thumbnail generation failed", "file", filepath.Base(path), "err", err)
 		_ = os.Remove(out)
 		return ""
 	}
 	if st, err := os.Stat(out); err != nil || st.Size() == 0 {
+		slog.Warn("video thumbnail generated empty or missing file", "file", filepath.Base(path))
 		_ = os.Remove(out)
 		return ""
+	}
+	return out
+}
+
+// PDFThumbnail renders the first page of a PDF using pdftoppm; "" on failure or if pdftoppm is missing.
+func PDFThumbnail(ctx context.Context, path string) string {
+	if _, err := exec.LookPath("pdftoppm"); err != nil {
+		return ""
+	}
+	out, err := tempJPG("pdfthumb")
+	if err != nil {
+		slog.Warn("pdf thumbnail failed: temp file error", "file", filepath.Base(path), "err", err)
+		return ""
+	}
+	_ = os.Remove(out)
+	prefix := strings.TrimSuffix(out, ".jpg")
+	if _, err := run(ctx, "pdftoppm", "-jpeg", "-f", "1", "-l", "1", "-scale-to", "320", path, prefix); err != nil {
+		slog.Warn("pdf thumbnail generation failed", "file", filepath.Base(path), "err", err)
+		return ""
+	}
+	candidates, _ := filepath.Glob(prefix + "-*.jpg")
+	if len(candidates) == 0 {
+		slog.Warn("pdf thumbnail generated no output file", "file", filepath.Base(path))
+		return ""
+	}
+	genFile := candidates[0]
+	_ = os.Rename(genFile, out)
+	_ = os.Chmod(out, 0o644)
+	for _, extra := range candidates[1:] {
+		_ = os.Remove(extra)
 	}
 	return out
 }

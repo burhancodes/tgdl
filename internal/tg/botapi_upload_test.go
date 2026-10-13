@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -779,5 +780,113 @@ func TestDownload_SameFileTwice_LocalBotAPI(t *testing.T) {
 	d2, err := os.ReadFile(p2)
 	if err != nil || !bytes.Equal(d2, fileContent) {
 		t.Fatalf("downloaded file 2 invalid: %v", err)
+	}
+}
+
+func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "sample.mp4")
+	thumbPath := filepath.Join(tempDir, "thumb.jpg")
+	if err := os.WriteFile(filePath, []byte("VIDEO_DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(thumbPath, []byte("THUMB_JPEG_DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var receivedFields = make(map[string]string)
+	var receivedFiles = make(map[string][]byte)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedFields = make(map[string]string)
+		receivedFiles = make(map[string][]byte)
+
+		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("parse media type: %v", err)
+		}
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		for {
+			p, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("next part error: %v", err)
+			}
+			data, err := io.ReadAll(p)
+			if err != nil {
+				t.Fatalf("read part: %v", err)
+			}
+			formName := p.FormName()
+			if p.FileName() != "" {
+				receivedFiles[formName] = data
+			} else {
+				receivedFields[formName] = string(data)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok": true, "result": {"message_id": 123}}`))
+	}))
+	defer server.Close()
+
+	api := NewBotAPI(nil, "TESTTOKEN")
+	api.BaseURL = server.URL
+	api.SetLocalDirMap(tempDir, "/container/downloads")
+
+	// 1. KindVideo with ServerVersion >= 9.0 (default 9.0)
+	err := api.Upload(context.Background(), 123, Upload{
+		Path:  filePath,
+		Thumb: thumbPath,
+		Kind:  KindVideo,
+	})
+	if err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+
+	// The video file itself should use file:// because of LocalDirMap
+	if val := receivedFields["video"]; !strings.HasPrefix(val, "file://") {
+		t.Errorf("expected video field to be file:// URL, got %q", val)
+	}
+
+	// Thumbnail must be attach://thumb and NOT file://
+	if val := receivedFields["thumbnail"]; val != "attach://thumb" {
+		t.Errorf("expected thumbnail field to be 'attach://thumb', got %q", val)
+	}
+	if data, ok := receivedFiles["thumb"]; !ok || string(data) != "THUMB_JPEG_DATA" {
+		t.Errorf("expected multipart file part named 'thumb' with thumbnail content, got %q (found=%v)", string(data), ok)
+	}
+
+	// Cover must be attach://cover and present on video upload when version >= 9.0
+	if val := receivedFields["cover"]; val != "attach://cover" {
+		t.Errorf("expected cover field to be 'attach://cover', got %q", val)
+	}
+	if data, ok := receivedFiles["cover"]; !ok || string(data) != "THUMB_JPEG_DATA" {
+		t.Errorf("expected multipart file part named 'cover' with cover content, got %q (found=%v)", string(data), ok)
+	}
+
+	// 2. KindVideo with ServerVersion < 9.0
+	api.SetServerVersion(8.3)
+	err = api.Upload(context.Background(), 123, Upload{
+		Path:  filePath,
+		Thumb: thumbPath,
+		Kind:  KindVideo,
+	})
+	if err != nil {
+		t.Fatalf("Upload with v8.3 failed: %v", err)
+	}
+
+	if _, ok := receivedFields["cover"]; ok {
+		t.Errorf("expected cover field to be omitted on Bot API < 9.0, but was present: %v", receivedFields["cover"])
+	}
+	if _, ok := receivedFiles["cover"]; ok {
+		t.Errorf("expected cover file part to be omitted on Bot API < 9.0, but was present")
+	}
+	if val := receivedFields["thumbnail"]; val != "attach://thumb" {
+		t.Errorf("expected thumbnail field to still be 'attach://thumb', got %q", val)
+	}
+	if data, ok := receivedFiles["thumb"]; !ok || string(data) != "THUMB_JPEG_DATA" {
+		t.Errorf("expected multipart 'thumb' on v8.3, got %q (found=%v)", string(data), ok)
 	}
 }
