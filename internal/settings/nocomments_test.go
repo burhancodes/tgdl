@@ -43,6 +43,7 @@ func TestTouchedFilesHaveNoComments(t *testing.T) {
 		"internal/jobs/sources.go",
 		"internal/jobs/tgupload.go",
 		"internal/logging/logging.go",
+		"internal/media/media.go",
 		"internal/tg/botapi.go",
 		"internal/tg/tg.go",
 		"internal/torrent/aria2.go",

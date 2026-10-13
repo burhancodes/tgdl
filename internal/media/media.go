@@ -1,5 +1,3 @@
-// Package media wraps ffmpeg/ffprobe for probing, thumbnails, conversion and
-// splitting. Every operation shells out with a context so it is cancellable.
 package media
 
 import (
@@ -7,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"math"
@@ -22,15 +24,15 @@ import (
 )
 
 var (
-	VideoExt = set(".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".wmv", ".3gp", ".mpeg", ".mpg", ".m4v", ".ts", ".tts", ".f4v")
-	// ConversionExt are video containers that Telegram players handle poorly;
-	// they are remuxed to MKV before upload. (.mov, .m4v, .webm play natively in Telegram).
+	VideoExt           = set(".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".wmv", ".3gp", ".mpeg", ".mpg", ".m4v", ".ts", ".tts", ".f4v")
 	ConversionExt      = set(".ts", ".flv", ".avi", ".wmv", ".mpeg", ".mpg", ".vob", ".3gp", ".f4v", ".tts", ".asf")
 	AudioExt           = set(".mp3", ".flac", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".wma", ".alac", ".aiff")
 	AudioConversionExt = set(".wav", ".flac", ".ogg", ".opus", ".aiff", ".aac")
 	ImageExt           = set(".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".heic", ".heif", ".ico")
 	ConvertibleImage   = set(".webp", ".bmp", ".tiff", ".heic", ".heif", ".ico")
 )
+
+const TelegramPhotoMaxSize int64 = 10 * 1024 * 1024
 
 func set(v ...string) map[string]bool {
 	m := make(map[string]bool, len(v))
@@ -40,10 +42,8 @@ func set(v ...string) map[string]bool {
 	return m
 }
 
-// Ext returns the lower-cased extension of path.
 func Ext(path string) string { return strings.ToLower(filepath.Ext(path)) }
 
-// Available reports whether ffmpeg and ffprobe are installed.
 func Available() bool {
 	_, e1 := exec.LookPath("ffmpeg")
 	_, e2 := exec.LookPath("ffprobe")
@@ -71,9 +71,6 @@ func tailStr(s string, n int) string {
 	return s
 }
 
-// ---- probing -------------------------------------------------------------
-
-// VideoInfo describes a probed video.
 type VideoInfo struct {
 	Duration  int
 	Width     int
@@ -97,6 +94,9 @@ type ffprobeOut struct {
 }
 
 func probe(ctx context.Context, path string) (*ffprobeOut, error) {
+	if !Available() {
+		return nil, errors.New("ffprobe not available")
+	}
 	out, err := run(ctx, "ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path)
 	if err != nil {
 		return nil, err
@@ -116,8 +116,6 @@ func parseDur(s string) int {
 	return int(f)
 }
 
-// ProbeVideo returns duration/size. On failure Decodable is false and the
-// other fields are zero, so callers can still upload as a plain document.
 func ProbeVideo(ctx context.Context, path string) VideoInfo {
 	p, err := probe(ctx, path)
 	if err != nil {
@@ -134,7 +132,6 @@ func ProbeVideo(ctx context.Context, path string) VideoInfo {
 	return vi
 }
 
-// AudioInfo holds audio tags.
 type AudioInfo struct {
 	Duration int
 	Artist   string
@@ -159,24 +156,37 @@ func ProbeAudio(ctx context.Context, path string) AudioInfo {
 	return AudioInfo{Duration: parseDur(p.Format.Duration), Artist: tag("artist", "album_artist"), Title: tag("title")}
 }
 
-// ---- images --------------------------------------------------------------
-
-// TelegramPhotoMaxSize is the strict maximum file size Telegram allows for photos (10 MB).
-const TelegramPhotoMaxSize int64 = 10 * 1024 * 1024
-
-// PhotoInvalidForTelegram reports images that Telegram's photo API rejects
-// (size > 10MB, bad dimensions/aspect ratio, palette/CMYK colour) so they go as documents.
 func PhotoInvalidForTelegram(ctx context.Context, path string) bool {
 	if st, err := os.Stat(path); err == nil && st.Size() > TelegramPhotoMaxSize {
 		return true
 	}
+	if !Available() {
+		f, err := os.Open(path)
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		cfg, _, err := image.DecodeConfig(f)
+		if err != nil {
+			return false
+		}
+		w, h := cfg.Width, cfg.Height
+		if w <= 0 || h <= 0 {
+			return false
+		}
+		if w+h > 10000 || max(w, h) > 9900 {
+			return true
+		}
+		r := float64(w) / float64(h)
+		return r > 15 || r < 1.0/15
+	}
 	p, err := probe(ctx, path)
 	if err != nil || len(p.Streams) == 0 {
-		return true
+		return false
 	}
 	s := p.Streams[0]
 	if s.Width <= 0 || s.Height <= 0 {
-		return true
+		return false
 	}
 	switch s.PixFmt {
 	case "pal8", "monob", "monow":
@@ -193,8 +203,10 @@ func PhotoInvalidForTelegram(ctx context.Context, path string) bool {
 	return r > 15 || r < 1.0/15
 }
 
-// ConvertImageToPNG converts via ffmpeg. It returns true on success.
 func ConvertImageToPNG(ctx context.Context, in, out string) bool {
+	if !Available() {
+		return false
+	}
 	if _, err := run(ctx, "ffmpeg", "-y", "-loglevel", "error", "-i", in, "-frames:v", "1", out); err != nil {
 		slog.Warn("image->png failed", "file", filepath.Base(in), "err", err)
 		_ = os.Remove(out)
@@ -206,7 +218,6 @@ func ConvertImageToPNG(ctx context.Context, in, out string) bool {
 
 var TempDir = ""
 
-// SetTempDir sets the temporary directory used for thumbnails and screenshots.
 func SetTempDir(dir string) { TempDir = dir }
 
 func tempJPG(stem string) (string, error) {
@@ -227,8 +238,10 @@ func tempJPG(stem string) (string, error) {
 	return name, nil
 }
 
-// ImageThumbnail makes a 320px JPEG thumbnail; "" on failure.
 func ImageThumbnail(ctx context.Context, path string) string {
+	if !Available() {
+		return ""
+	}
 	out, err := tempJPG("thumb")
 	if err != nil {
 		slog.Warn("image thumbnail failed: temp file error", "file", filepath.Base(path), "err", err)
@@ -249,8 +262,10 @@ func ImageThumbnail(ctx context.Context, path string) string {
 	return out
 }
 
-// VideoThumbnail grabs a frame near the start; "" on failure.
 func VideoThumbnail(ctx context.Context, path string, duration int) string {
+	if !Available() {
+		return ""
+	}
 	out, err := tempJPG("vthumb")
 	if err != nil {
 		slog.Warn("video thumbnail failed: temp file error", "file", filepath.Base(path), "err", err)
@@ -274,7 +289,6 @@ func VideoThumbnail(ctx context.Context, path string, duration int) string {
 	return out
 }
 
-// PDFThumbnail renders the first page of a PDF using pdftoppm; "" on failure or if pdftoppm is missing.
 func PDFThumbnail(ctx context.Context, path string) string {
 	if _, err := exec.LookPath("pdftoppm"); err != nil {
 		return ""
@@ -304,9 +318,8 @@ func PDFThumbnail(ctx context.Context, path string) string {
 	return out
 }
 
-// Screenshots grabs up to nine frames at random timestamps.
 func Screenshots(ctx context.Context, path string, duration int) []string {
-	if duration <= 0 {
+	if !Available() || duration <= 0 {
 		return nil
 	}
 	ts := make([]float64, 9)
@@ -341,10 +354,10 @@ func Screenshots(ctx context.Context, path string, duration int) []string {
 	return shots
 }
 
-// ---- conversion ----------------------------------------------------------
-
-// ConvertVideoToMKV remuxes (stream copy) into Matroska.
 func ConvertVideoToMKV(ctx context.Context, in, out string) bool {
+	if !Available() {
+		return false
+	}
 	if _, err := run(ctx, "ffmpeg", "-y", "-loglevel", "error", "-i", in, "-map", "0", "-c", "copy", "-f", "matroska", out); err != nil {
 		slog.Warn("remux to mkv failed", "file", filepath.Base(in), "err", err)
 		_ = os.Remove(out)
@@ -358,8 +371,10 @@ func ConvertVideoToMKV(ctx context.Context, in, out string) bool {
 	return false
 }
 
-// ConvertAudioToMP3 transcodes to 320k MP3, preserving tags.
 func ConvertAudioToMP3(ctx context.Context, in, out string) bool {
+	if !Available() {
+		return false
+	}
 	if _, err := run(ctx, "ffmpeg", "-y", "-loglevel", "error", "-i", in, "-vn", "-map_metadata", "0",
 		"-codec:a", "libmp3lame", "-b:a", "320k", out); err != nil {
 		slog.Warn("audio->mp3 failed", "file", filepath.Base(in), "err", err)
@@ -374,10 +389,6 @@ func ConvertAudioToMP3(ctx context.Context, in, out string) bool {
 	return false
 }
 
-// ---- splitting -----------------------------------------------------------
-
-// SplitBinary splits into "<name>.001, .002 ..." parts of ~98% of maxBytes.
-// On any failure all created parts are removed and nil is returned.
 func SplitBinary(path string, maxBytes int64) ([]string, error) {
 	in, err := os.Open(path)
 	if err != nil {
@@ -420,11 +431,10 @@ func SplitBinary(path string, maxBytes int64) ([]string, error) {
 	return parts, nil
 }
 
-// SplitVideo cuts a video into playable segments below maxBytes using ffmpeg's
-// segment muxer with stream copy. Segment length is derived from the average
-// bitrate with a safety margin; the caller falls back to SplitBinary if any
-// part is still oversized.
 func SplitVideo(ctx context.Context, path string, maxBytes int64) ([]string, error) {
+	if !Available() {
+		return nil, errors.New("ffmpeg not available")
+	}
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -467,9 +477,6 @@ func cleanGlob(pattern string) {
 	}
 }
 
-// HandleLarge splits oversized files. It returns the files to upload; the
-// original is removed whenever it was split or dropped. Files within the limit
-// are returned unchanged.
 func HandleLarge(ctx context.Context, path string, split bool, limit int64) []string {
 	st, err := os.Stat(path)
 	if err != nil {
