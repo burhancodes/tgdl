@@ -12,12 +12,9 @@ import (
 
 var allowedReadFileFiles = map[string]string{
 	"cmd/tgdl/main.go":             "cgroup memory limit read",
-	"internal/apk/patcher.go":      "tool bootstrap check",
-	"internal/bot/cmd_download.go": "gallery-dl cookie/config file (size-bounded)",
-	"internal/bot/cmd_misc.go":     "gallery-dl cookie/config file (size-bounded)",
-	"internal/config/keystore.go":  "keystore config read",
+	"internal/bot/cmd_download.go": "credentials file (size-bounded)",
+	"internal/bot/cmd_misc.go":     "cookies file (size-bounded)",
 	"internal/dl/deviceprofile.go": "device profile config read",
-	"internal/dl/xenforo.go":       "cookie file read",
 	"internal/torrent/aria2.go":    "torrent-file read",
 	"internal/torrent/trackers.go": "trackers cache read",
 	"internal/gdrive/gdrive.go":    "creds / tokens file read",
@@ -25,7 +22,6 @@ var allowedReadFileFiles = map[string]string{
 }
 
 func TestMemGuard(t *testing.T) {
-	// Find root directory containing go.mod
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +75,6 @@ func TestMemGuard(t *testing.T) {
 				return true
 			}
 
-			// Check os.ReadFile and ioutil.ReadFile
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 				if id, ok := sel.X.(*ast.Ident); ok {
 					if (id.Name == "os" || id.Name == "ioutil") && sel.Sel.Name == "ReadFile" {
@@ -89,7 +84,6 @@ func TestMemGuard(t *testing.T) {
 						}
 					}
 
-					// Check io.ReadAll
 					if id.Name == "io" && sel.Sel.Name == "ReadAll" {
 						if _, allowed := allowedReadFileFiles[rel]; !allowed {
 							isLimitReader := false
@@ -111,7 +105,6 @@ func TestMemGuard(t *testing.T) {
 						}
 					}
 
-					// Check http.NewRequest / http.NewRequestWithContext
 					if id.Name == "http" && (sel.Sel.Name == "NewRequest" || sel.Sel.Name == "NewRequestWithContext") {
 						bodyArg := call.Args[len(call.Args)-1]
 						if isBytesBuffer(bodyArg) {
@@ -138,8 +131,6 @@ func TestMemGuard(t *testing.T) {
 }
 
 func isBytesBuffer(expr ast.Expr) bool {
-	// Check &buf or buf where buf is bytes.Buffer
-	// or bytes.NewBuffer(...)
 	switch e := expr.(type) {
 	case *ast.UnaryExpr:
 		return isBytesBuffer(e.X)

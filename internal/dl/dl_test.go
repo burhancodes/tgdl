@@ -1,6 +1,9 @@
 package dl
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseArgsLegacyAndJSON(t *testing.T) {
 	a := ParseArgs(`{"user_id": 42, "engine": "aria2", "password": "pw", "extra_args": ["-x"]}`)
@@ -47,9 +50,57 @@ func TestParseURLsSorted(t *testing.T) {
 	}
 }
 
-func TestParseXenforoArgs(t *testing.T) {
-	o := ParseXenforoArgs([]string{"--password", "a", "-p=b", "--max-pages", "5"})
-	if len(o.Passwords) != 2 || o.MaxPages != 5 {
-		t.Errorf("unexpected opts: %+v", o)
+func TestSanitizeExtraArgs(t *testing.T) {
+	cases := []struct {
+		input []string
+		want  []string
+	}{
+		{
+			input: []string{"--config", "evil.conf", "--verbose"},
+			want:  []string{"--verbose"},
+		},
+		{
+			input: []string{"--config=evil.conf", "-v"},
+			want:  []string{"-v"},
+		},
+		{
+			input: []string{"--config-file", "evil.yaml", "--threads", "4"},
+			want:  []string{"--threads", "4"},
+		},
+		{
+			input: []string{"--config-file=evil.yaml"},
+			want:  nil,
+		},
+		{
+			input: []string{"-c", "my.conf", "--sleep", "2"},
+			want:  []string{"--sleep", "2"},
+		},
+		{
+			input: []string{"-c=my.conf"},
+			want:  nil,
+		},
+		{
+			input: []string{"-o", "/etc/passwd", "-o", "extractor.oauth=false"},
+			want:  []string{"-o", "extractor.oauth=false"},
+		},
+		{
+			input: []string{"-o=/etc/passwd", "-o=extractor.oauth=false"},
+			want:  []string{"-o=extractor.oauth=false"},
+		},
+		{
+			input: []string{"-o", "file.json", "--option", "file.yaml", "--option", "safe=1"},
+			want:  []string{"--option", "safe=1"},
+		},
+		{
+			input: []string{"--option=/root/.bashrc", "--option=safe=1"},
+			want:  []string{"--option=safe=1"},
+		},
+	}
+
+	for _, c := range cases {
+		got := SanitizeExtraArgs(c.input)
+		if !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) {
+			t.Errorf("SanitizeExtraArgs(%v) = %v, want %v", c.input, got, c.want)
+		}
 	}
 }

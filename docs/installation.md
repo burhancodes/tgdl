@@ -9,19 +9,18 @@ This guide covers system prerequisites, manual local installation, environment v
 Before running TGDL Bot, ensure the following system dependencies are installed on your host OS:
 
 - **Go**: 1.26 or newer
-- **Node.js**: 18.0 or newer (required for running the Magnetio / XenForo search sidecar in `scraper/`).
+- **Node.js**: 18.0 or newer (required for running the torrent search sidecar in `scraper/`).
 - **FFmpeg & FFprobe**: Required for video metadata extraction, thumbnail generation, and audio/video transcoding.
 - **aria2c**: Required for direct multi-connection HTTP downloads and torrent/magnet link handling.
 - **System Archive Utilities**:
   - Linux: `unzip`, `unrar` / `rar`, `p7zip-full` / `7z`, `tar`, `gzip`, `bzip2`, `xz-utils`
 - **External CLI Tools**:
   - `gallery-dl` & `cyberdrop-dl-patched`: For image board and gallery downloads (`pip install gallery-dl cyberdrop-dl-patched`).
-  - Java JRE (`default-jre-headless`): For Android APK patching (`/patch`).
 
 ### Installing Prerequisites on Ubuntu / Debian
 ```bash
 sudo apt update
-sudo apt install -y golang nodejs npm ffmpeg aria2 unzip unrar p7zip-full tar gzip bzip2 xz-utils default-jre-headless python3-pip
+sudo apt install -y golang nodejs npm ffmpeg aria2 unzip unrar p7zip-full tar gzip bzip2 xz-utils python3-pip
 pip install --break-system-packages gallery-dl cyberdrop-dl-patched
 ```
 

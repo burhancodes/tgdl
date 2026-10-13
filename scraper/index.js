@@ -9,9 +9,8 @@ import { startCronJobs } from './lib/cron.js';
 import { runPrewarm, getPrewarmStatus } from './lib/prewarm.js';
 import { logger } from './lib/logger.js';
 import { rpcMiddleware } from './rpcHandler.js';
-import { scrapeXenForo } from './xenforo/index.js';
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 8080;
 const deploymentRevision = (() => {
   try {
@@ -20,71 +19,28 @@ const deploymentRevision = (() => {
   } catch { return undefined; }
 })();
 
-// Cache TTLs
 const TTL_STREAMS = parseInt(process.env.CACHE_TTL_STREAMS ?? '3600', 10);
 
 app.use(express.json());
 app.set('trust proxy', 1);
 
-// ─── JSON-RPC 2.0 ─────────────────────────────────────────────────────────────
-
 app.post('/rpc', rpcMiddleware);
-
-// ─── Health ───────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'magnetio-scraper', version: '1.2.0', revision: deploymentRevision });
 });
 
-// ─── Provider list ────────────────────────────────────────────────────────────
-
 app.get('/providers', (_req, res) => {
   res.json({ providers: listProviders() });
 });
 
-// ─── XenForo Forum Scraper ───────────────────────────────────────────────────
-
-app.post(['/xenforo/scrape', '/forum/scrape'], async (req, res) => {
-  const { url, userId, user_id, cookies, cookiesTxt, passwords, maxPages, enabledHosts, concurrency } = req.body || {};
-  if (!url) {
-    return res.status(400).json({ error: 'url parameter is required.' });
-  }
-
-  try {
-    const result = await scrapeXenForo({
-      url,
-      userId: userId || user_id || null,
-      cookiesTxt: cookiesTxt || cookies || null,
-      passwords: Array.isArray(passwords) ? passwords : [],
-      maxPages: maxPages ? parseInt(maxPages, 10) : 1,
-      enabledHosts: Array.isArray(enabledHosts) ? enabledHosts : null,
-      concurrency: concurrency ? parseInt(concurrency, 10) : 8,
-    });
-    res.json(result);
-  } catch (err) {
-    logger.error(`XenForo scrape error [${url}]: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── Streams endpoint ─────────────────────────────────────────────────────────
-//
-// GET /streams/:type/:id
-//   :type  = movie | series | anime
-//   :id    = tt1234567  (movie)
-//          = tt1234567:1:2  (series season 1 episode 2)
-//          = kitsu:12345    (kitsu anime ID — treated as series)
-//
-// Query params:
-//   providers  = comma-separated provider IDs (optional)
-
 app.get('/streams/:type/:id', async (req, res) => {
   const { type, id } = req.params;
-  const providerIds  = req.query.providers
+  const providerIds = req.query.providers
     ? req.query.providers.split(',').map(s => s.trim()).filter(Boolean)
     : null;
 
-  const torznabUrl    = req.query.torznabUrl || null;
+  const torznabUrl = req.query.torznabUrl || null;
   const torznabApiKey = req.query.torznabApiKey || null;
   const context = { torznabUrl, torznabApiKey };
 
@@ -99,7 +55,6 @@ app.get('/streams/:type/:id', async (req, res) => {
 
   try {
     const { value: streams, cached } = await cacheWrap(cacheKey, async () => {
-      // 1. Resolve metadata (title, year, season, episode)
       const meta = await getMetadata(type === 'anime' ? 'series' : type, id);
       if (!meta) {
         logger.warn(`No metadata for ${type}/${id}, skipping`);
@@ -109,7 +64,6 @@ app.get('/streams/:type/:id', async (req, res) => {
       const label = meta.year ? `"${meta.name}" (${meta.year})` : `"${meta.name}"`;
       logger.info(`Scraping ${label} [${type}] from ${providerIds?.join(',') ?? 'all providers'}`);
 
-      // 2. Scrape all providers in parallel
       return scrapeAll(type, meta, providerIds, { ...context, strict: true }, true);
     }, TTL_STREAMS);
 
@@ -119,8 +73,6 @@ app.get('/streams/:type/:id', async (req, res) => {
     res.status(500).json({ error: err.message, streams: [] });
   }
 });
-
-// ─── Prewarm ─────────────────────────────────────────────────────────────────
 
 app.post('/prewarm', (_req, res) => {
   const { running } = getPrewarmStatus();
@@ -133,11 +85,7 @@ app.get('/prewarm/status', (_req, res) => {
   res.json(getPrewarmStatus());
 });
 
-// ─── 404 ──────────────────────────────────────────────────────────────────────
-
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
-
-// ─── Start ────────────────────────────────────────────────────────────────────
 
 const server = app.listen(PORT, () => {
   logger.info(`Magnetio scraper running on port ${PORT}`);

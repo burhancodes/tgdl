@@ -32,8 +32,6 @@ type seen struct {
 	at   time.Time
 }
 
-// uploadStage is the consumer half of the pipeline. Depending on the source it
-// either streams files as they finish downloading or waits for the whole set.
 func (m *Manager) uploadStage(st *State) {
 	defer st.finishUpload()
 	job := st.Job()
@@ -47,7 +45,7 @@ func (m *Manager) uploadStage(st *State) {
 
 	first := dl.FirstURL(job.URL)
 	waitAll := isTorrentURL(first) || args.ArchiveFormat != "" || args.Unzip || args.Engine == "aria2" ||
-		strings.HasPrefix(first, "patch:") || strings.HasPrefix(first, "unzip:")
+		strings.HasPrefix(first, "unzip:")
 	if waitAll {
 		select {
 		case <-st.downloaderDone:
@@ -92,8 +90,6 @@ func (m *Manager) uploadStage(st *State) {
 	}
 }
 
-// readyFiles lists files that are pending and (unless the download is over)
-// have stopped growing.
 func readyFiles(st *State, track map[string]seen, done bool) []string {
 	var out []string
 	for _, fi := range fsutil.ListUploadableWithInfo(st.Dest) {
@@ -118,8 +114,6 @@ func readyFiles(st *State, track map[string]seen, done bool) []string {
 	return out
 }
 
-// groupSplitParts collects sets of ≥2 split parts that share a base name,
-// produced by this job's own splitting, so they can go out as albums.
 func groupSplitParts(st *State, files []string) [][]string {
 	byKey := map[string][]string{}
 	var order []string
@@ -186,7 +180,6 @@ func (s *State) setAsDoc(v bool) {
 	s.mu.Unlock()
 }
 
-// afterUpload records success, deletes the local copy and refreshes counters.
 func (m *Manager) afterUpload(st *State, f, rel string) {
 	job := st.Job()
 	if info, err := os.Stat(f); err == nil {
@@ -215,7 +208,6 @@ func (m *Manager) logUpload(jobID, name string) {
 	fmt.Fprintf(f, "%s - Job #%s - Uploaded: %s\n", time.Now().Format("2006-01-02 15:04:05"), jobID, name)
 }
 
-// pace sleeps between uploads to stay under Telegram's radar.
 func (m *Manager) pace(st *State) {
 	st.mu.Lock()
 	st.sessionCount++
@@ -230,8 +222,6 @@ func (m *Manager) pace(st *State) {
 	_ = pacing.RandomDelay(st.ctx, c.TGUploadDelayMin, c.TGUploadDelayMax, mult)
 }
 
-// processFile drives one file through archive handling, conversion, splitting
-// and upload/mirror. root is the directory rel paths are computed against.
 func (m *Manager) processFile(st *State, root, f string, nested bool) {
 	job := st.Job()
 	args := st.Args()
@@ -250,7 +240,6 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 	f = fsutil.EnsureExtension(f)
 	name = filepath.Base(f)
 
-	// Archives.
 	if !nested {
 		isSplitPart := st.isSplitPart(rel, name)
 		isArchive := (archive.IsArchiveExt(f) && !isSplitPart) || archive.IsFirstSplitPartOfArchive(name)
@@ -264,26 +253,23 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 			}
 		} else if args.Unzip {
 			if si := archive.SplitArchiveInfo(name); si != nil && si.Part > 1 {
-				// Later volumes are consumed with part one; never upload them.
+
 				return
 			}
 		}
 	}
 
-	// Video → MKV remux for players that dislike odd containers.
 	if media.ConversionExt[media.Ext(f)] && !st.sess.convertedBefore(name) {
 		st.sess.markConverted(name)
 		f, key = m.convertVideo(st, f, root, key)
 		name = filepath.Base(f)
 	}
 
-	// Audio → MP3 (asks first).
 	if media.AudioConversionExt[media.Ext(f)] && !args.IsMirror {
 		f, key = m.maybeConvertAudio(st, f, root, key)
 		name = filepath.Base(f)
 	}
 
-	// Oversized files.
 	limit := m.d.Cfg.UploadLimit()
 	if !args.IsMirror || args.UploadTG {
 		parts := func() []string {
@@ -318,11 +304,10 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 					m.processFile(st, root, p, true)
 				}
 			}
-			return // parts are picked up on the next scan
+			return
 		}
 	}
 
-	// Web mirror (GoFile / FileDitch / Pixeldrain).
 	if args.IsMirror {
 		st.beginUpload(key, name)
 		rec := m.mirrorFile(st, f)
@@ -334,7 +319,6 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 		}
 	}
 
-	// Telegram upload.
 	if err := m.ulSem.Acquire(st.ctx, 1); err != nil {
 		return
 	}
@@ -362,7 +346,6 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 	m.pace(st)
 }
 
-// handleArchive returns true when the archive itself must not be uploaded.
 func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (skipUpload bool) {
 	job := st.Job()
 	name := filepath.Base(f)
@@ -410,7 +393,6 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		return true
 	}
 
-	// Regular job: ask what to do with the archive.
 	id := st.sess.archiveID(rel)
 	choice, decided := st.sess.archiveChoice(id)
 	if !decided {
@@ -462,7 +444,6 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 
 func statusOK(jobID, name string) string { return status.ExtractionOK(jobID, name) }
 
-// consumeArchive deletes an extracted archive and every sibling volume.
 func (m *Manager) consumeArchive(st *State, f, rel string) {
 	_ = os.Remove(f)
 	st.markUploaded(rel)
@@ -480,7 +461,6 @@ func (m *Manager) consumeArchive(st *State, f, rel string) {
 	}
 }
 
-// extract runs archive.Extract, prompting the user for a password as needed.
 func (m *Manager) extract(st *State, path, name string) error {
 	job := st.Job()
 	limits := archive.ExtractLimits{
@@ -628,8 +608,6 @@ func (m *Manager) maybeConvertAudio(st *State, f, root, key string) (string, str
 	return out, rel
 }
 
-// mirrorFile uploads one file to all web hosts sequentially, publishing live
-// progress in the status card.
 func (m *Manager) mirrorFile(st *State, path string) MirrorRecord {
 	const tenGB = 10 << 30
 	uid := st.Args().UserIDInt()

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/burhanverse/tgdl/internal/config"
@@ -21,12 +19,6 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Patcher signs/patches an APK (implemented in internal/apk).
-type Patcher interface {
-	Patch(ctx context.Context, input, outDir, originalName string, ks *config.KeystoreInfo, stage func(string)) (string, error)
-}
-
-// Deps are the collaborators shared by all sources and the pipeline.
 type Deps struct {
 	Cfg      *config.Config
 	Store    *store.Store
@@ -35,32 +27,23 @@ type Deps struct {
 	Hosts    *upload.Hosts
 	Runner   *dl.Runner
 	Aria     *torrent.Aria2
-	Xenforo  *dl.Xenforo
-	Patcher  Patcher
 	HeavySem *semaphore.Weighted
 }
 
-// Request is what a Source sees.
 type Request struct {
 	Job  *store.Job
 	Args dl.Args
-	URL  string // first URL of the job, prefixes intact
+	URL  string
 	Dest string
 	St   *State
 }
 
-// Source downloads one family of URLs. The manager tries sources in
-// registration order; the first whose Match returns true fetches the job.
-// Adding a new provider means implementing this interface and registering it —
-// there is no central if/elif chain to edit.
 type Source interface {
 	Name() string
 	Match(r *Request) bool
 	Fetch(ctx context.Context, r *Request) dl.Result
 }
 
-// DiskMonitored is implemented by sources that do not report bytes themselves;
-// the manager then measures progress by scanning the destination directory.
 type DiskMonitored interface{ DiskMonitored() bool }
 
 func isTorrentURL(u string) bool {
@@ -83,16 +66,13 @@ func listAll(dir string) []string {
 	return f
 }
 
-// DefaultSources builds the ordered source chain.
 func DefaultSources(d *Deps) []Source {
 	return []Source{
-		&unzipSource{d}, &patchSource{d}, &driveSource{d}, &megaSource{d}, &gofileSource{d},
-		&ariaSource{d}, &mirrorTGSource{d}, &mirrorSource{d}, &xenforoSource{d},
+		&unzipSource{d}, &driveSource{d}, &megaSource{d}, &gofileSource{d},
+		&ariaSource{d}, &mirrorTGSource{d}, &mirrorSource{d},
 		&cyberdropSource{d}, &directSource{d}, &galleryDLSource{d},
 	}
 }
-
-// ---- Telegram-file based sources -------------------------------------------
 
 func downloadTG(ctx context.Context, d *Deps, st *State, f *dl.TGFile, dest string) (string, error) {
 	if f == nil || f.FileID == "" {
@@ -133,69 +113,6 @@ func (s mirrorTGSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	}
 	return dl.Result{OK: true, Files: []string{p}}
 }
-
-type patchSource struct{ d *Deps }
-
-func (patchSource) Name() string { return "apk-patch" }
-func (patchSource) Match(r *Request) bool {
-	return strings.HasPrefix(r.URL, "patch:")
-}
-func (s patchSource) Fetch(ctx context.Context, r *Request) dl.Result {
-	st := r.St
-	st.SetPatch(true)
-	st.SetEngine("APKEditor + tgpatcher")
-	if s.d.Patcher == nil {
-		return fail("APK patcher is not configured")
-	}
-	work := r.Dest + "_patch_work"
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		return fail("%v", err)
-	}
-	defer os.RemoveAll(work)
-
-	orig := r.Args.OriginalFilename
-	if orig == "" {
-		orig = "app.apk"
-	}
-	var input string
-	switch {
-	case r.Args.TGFile != nil:
-		p, err := downloadTG(ctx, s.d, st, r.Args.TGFile, work)
-		if err != nil {
-			return fail("download Telegram APK: %v", err)
-		}
-		input = p
-	case r.Args.TargetURL != "":
-		d := dl.NewDirect(s.d.Cfg, st.Bytes)
-		files, err := d.Download(ctx, work, r.Args.TargetURL)
-		if err != nil || len(files) == 0 {
-			return fail("download APK from URL: %v", err)
-		}
-		input = files[0]
-	default:
-		return fail("no APK source provided")
-	}
-	if s.d.HeavySem != nil {
-		if err := s.d.HeavySem.Acquire(ctx, 1); err != nil {
-			return fail("acquire heavy semaphore: %v", err)
-		}
-		defer s.d.HeavySem.Release(1)
-	}
-	out, err := s.d.Patcher.Patch(ctx, input, work, orig, s.d.Cfg.UserKeystore(r.Args.UserIDInt()), st.SetPatchStage)
-	if err != nil {
-		return fail("%v", err)
-	}
-	if err := os.MkdirAll(r.Dest, 0o755); err != nil {
-		return fail("%v", err)
-	}
-	final := filepath.Join(r.Dest, filepath.Base(out))
-	if err := os.Rename(out, final); err != nil {
-		return fail("move patched APK: %v", err)
-	}
-	return dl.Result{OK: true, Files: []string{final}}
-}
-
-// ---- cloud/file-host sources ---------------------------------------------
 
 type driveSource struct{ d *Deps }
 
@@ -266,8 +183,6 @@ func stripGofile(raw string) string {
 	return dl.StripGofilePrefix(raw)
 }
 
-// ---- aria2 (torrents, magnets, explicit engine) ---------------------------
-
 type ariaSource struct{ d *Deps }
 
 func (ariaSource) Name() string { return "aria2" }
@@ -284,8 +199,6 @@ func (s ariaSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	h := func(p torrent.Progress) { st.Aria(p.Pct, p.Completed, p.Speed, p.Seeders, p.Connection, p.Name) }
 	return s.d.Aria.Download(ctx, target, r.Dest, r.Args.AriaOptions, h)
 }
-
-// ---- generic HTTP mirror ---------------------------------------------------
 
 type mirrorSource struct{ d *Deps }
 
@@ -313,23 +226,6 @@ func (s mirrorSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	return res
 }
 
-// ---- XenForo forums --------------------------------------------------------
-
-type xenforoSource struct{ d *Deps }
-
-func (xenforoSource) Name() string { return "xenforo" }
-func (xenforoSource) Match(r *Request) bool {
-	return dl.IsXenforoURL(r.URL) || r.Args.Engine == "xenforo"
-}
-func (s xenforoSource) Fetch(ctx context.Context, r *Request) dl.Result {
-	r.St.SetEngine("XenForo Scraper")
-	target := dl.StripXenforoPrefix(dl.FirstURL(r.Job.URL))
-	opts := dl.ParseXenforoArgs(r.Args.CLIExtra())
-	return s.d.Xenforo.Download(ctx, target, r.Dest, r.Args.UserIDInt(), opts, r.St.Count)
-}
-
-// ---- cyberdrop-dl ----------------------------------------------------------
-
 type cyberdropSource struct{ d *Deps }
 
 func (cyberdropSource) Name() string { return "cyberdrop-dl" }
@@ -348,8 +244,6 @@ func (s cyberdropSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	}
 	return res
 }
-
-// ---- direct links / HLS ----------------------------------------------------
 
 type directSource struct{ d *Deps }
 
@@ -374,8 +268,6 @@ func (s directSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	return resultFromFiles(files, err)
 }
 
-// ---- default: gallery-dl → cyberdrop-dl → direct ---------------------------
-
 type galleryDLSource struct{ d *Deps }
 
 func (galleryDLSource) Name() string        { return "gallery-dl" }
@@ -392,10 +284,9 @@ func (s galleryDLSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	return res
 }
 
-// diskMonitored reports whether the manager should scan the disk for progress.
 func diskMonitored(s Source) bool {
 	switch s.(type) {
-	case *galleryDLSource, *cyberdropSource, *xenforoSource:
+	case *galleryDLSource, *cyberdropSource:
 		return true
 	}
 	if m, ok := s.(DiskMonitored); ok {

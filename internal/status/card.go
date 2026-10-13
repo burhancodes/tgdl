@@ -5,16 +5,14 @@ import (
 	"strings"
 )
 
-// HostState is the mirror progress of one file host.
 type HostState struct {
-	Status string // pending|uploading|done|skipped|failed
+	Status string
 	Pct    float64
 	Speed  float64
 	URL    string
 	Error  string
 }
 
-// SystemStats is a host resource snapshot.
 type SystemStats struct {
 	CPU, RAM         float64
 	DiskFree         uint64
@@ -22,15 +20,13 @@ type SystemStats struct {
 	NetSent, NetRecv uint64
 }
 
-// Snapshot is a point-in-time copy of job state for rendering.
 type Snapshot struct {
 	JobID, Status, Target, Args string
 	SplitEnabled                bool
 
-	// Download stage.
 	Engine         string
 	DownloadDone   bool
-	Determinate    bool // true when Pct is meaningful
+	Determinate    bool
 	Pct            float64
 	Downloaded     int64
 	Expected       int64
@@ -40,18 +36,12 @@ type Snapshot struct {
 	TorrentName    string
 	Seeders, Peers int
 	IsTorrent      bool
-	IsPatch        bool
-	PatchStage     string
-	PatchInput     string
-	PatchOutput    string
 
-	// Post-processing.
 	Converting  bool
 	ConvertFile string
 	Archiving   bool
 	ArchiveFmt  string
 
-	// Upload stage.
 	TotalFiles   int
 	Sent         int
 	Skipped      int
@@ -71,32 +61,8 @@ const bullet = "• "
 
 func kv(b *strings.Builder, k, v string) { fmt.Fprintf(b, "%s<b>%s</b>: %s\n", bullet, k, v) }
 
-// Job renders the live status card as Telegram HTML.
 func Job(s Snapshot) string {
 	var b strings.Builder
-	if s.IsPatch {
-		fmt.Fprintf(&b, "<b>APK Patching Pipeline</b> <code>#%s</code>\n\n<blockquote>", Esc(s.JobID))
-		kv(&b, "Input", Code(s.PatchInput))
-		kv(&b, "Output", Code(s.PatchOutput))
-		kv(&b, "Signer", Code("JKS Keystore"))
-		b.WriteString("</blockquote>\n")
-		if !s.DownloadDone {
-			fmt.Fprintf(&b, "<b>Pipeline</b>\n<blockquote>")
-			stage := s.PatchStage
-			if stage == "" {
-				stage = "Initializing patch pipeline..."
-			}
-			kv(&b, "Stage", Code(stage))
-			kv(&b, "State", Code("["+Marquee()+"]"))
-			kv(&b, "Processed", Code(Size(float64(s.Downloaded))))
-			b.WriteString("</blockquote>")
-		} else {
-			b.WriteString("<b>Uploader</b>\n<blockquote>")
-			kv(&b, "Status", Code("Uploading patched APK to Telegram... ["+Marquee()+"]"))
-			b.WriteString("</blockquote>")
-		}
-		return b.String()
-	}
 
 	fmt.Fprintf(&b, "<b>Task #%s</b>\n\n<blockquote>", Esc(s.JobID))
 	kv(&b, "Status", Code(strings.ToUpper(s.Status)))
@@ -215,7 +181,6 @@ func Job(s Snapshot) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// Queued renders the card shown while a job waits in the queue.
 func Queued(jobID, target, args string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<b>Task #%s Queued</b>\n\n<blockquote>", Esc(jobID))
@@ -227,8 +192,6 @@ func Queued(jobID, target, args string) string {
 	b.WriteString("</blockquote>")
 	return b.String()
 }
-
-// Prompt and progress messages used by the interactive flows.
 
 func ArchivePrompt(jobID, file string) string {
 	return fmt.Sprintf("<b>Archive detected</b> <code>#%s</code>\n\n<blockquote>%s%s</blockquote>\nUpload the archive as-is, or extract it and upload the contents too? Defaults to <b>archive only</b> in 15 seconds.",

@@ -9,7 +9,7 @@ This document details the memory, CPU, disk, and concurrency guards implemented 
 To eliminate OOM crashes and resource storms:
 1. **Streaming Uploads**: All Telegram uploads stream directly from disk using chunked multipart HTTP requests (`io.MultiReader`). Files are never buffered in memory.
 2. **Streaming Decryption & Subprocess Pipes**: HLS AES-128-CBC downloads decrypt stream-by-stream directly to disk. Subprocess output is captured in a bounded tail buffer (~64 KiB), avoiding memory leaks from verbose tool outputs.
-3. **Heavy Work Concurrency Gate**: A centralized weighted semaphore restricts concurrent CPU- and RAM-intensive jobs (extraction, archiving, remuxing, file splitting, and APK patching).
+3. **Heavy Work Concurrency Gate**: A centralized weighted semaphore restricts concurrent CPU- and RAM-intensive jobs (extraction, archiving, remuxing, and file splitting).
 4. **Volume Creation & Disk Guards**: Directory archiving creates multi-part volumes in a single pass (`7z a -v<N>m`) without full intermediate archives. Free disk space is verified before and during operations.
 
 ---
@@ -19,7 +19,7 @@ To eliminate OOM crashes and resource storms:
 | Variable | Default | Description |
 |---|---|---|
 | `TG_ALBUM_MAX_BYTES` | `67108864` (64 MiB) | Maximum cumulative size of files to upload together in a media group album. Oversized batches are split or sent individually. |
-| `TG_MAX_CONCURRENT_HEAVY` | `1` | Global concurrency gate for heavy operations (extract, archive, video/audio convert, large file split, apk patch). Never held during user prompts. |
+| `TG_MAX_CONCURRENT_HEAVY` | `1` | Global concurrency gate for heavy operations (extract, archive, video/audio convert, large file split). Never held during user prompts. |
 | `EXTRACT_THREADS` | `2` | Number of threads passed to 7-Zip (`-mmt=`) during archive extraction. |
 | `ARCHIVE_THREADS` | `2` | Number of threads passed to 7-Zip during folder compression. |
 | `ARCHIVE_ZIP_LEVEL` | `1` | Compression level for zip archives (fast compression, low CPU/RAM). |

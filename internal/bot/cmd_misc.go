@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,8 +18,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 )
-
-// ---- status / cancel --------------------------------------------------------
 
 func (a *App) statusText(chatFilter int64) string {
 	states := a.mgr.Running(chatFilter)
@@ -81,7 +78,6 @@ func (a *App) isJobOwner(chatID, uid int64, j *store.Job) bool {
 	return j.ChatID == chatID || a.auth.IsOwner(uid)
 }
 
-// cancelJob cancels a running job or marks a not-yet-started one cancelled.
 func (a *App) cancelJob(ctx context.Context, j *store.Job) {
 	if !a.mgr.Cancel(j.ID) {
 		_ = a.store.SetStatus(ctx, j.ID, store.StatusCancelled)
@@ -123,8 +119,6 @@ func (a *App) cmdCancel(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	a.replyKB(ctx, m, "<b>Select a job to cancel:</b>", kb)
 }
 
-// ---- upload keys ------------------------------------------------------------
-
 func mask(k string) string {
 	if len(k) <= 4 {
 		return "****"
@@ -157,13 +151,11 @@ func (a *App) cmdKey(service, label string) tgbot.HandlerFunc {
 				a.reply(ctx, m, "Could not save the key: "+code(err.Error()))
 				return
 			}
-			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID}) // keep secrets out of the chat
+			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID})
 			a.reply(ctx, m, fmt.Sprintf("Saved your personal %s API key (%s).", label, code(mask(arg))))
 		}
 	}
 }
-
-// ---- direct host uploads ----------------------------------------------------
 
 func (a *App) cmdHostUpload(host string) tgbot.HandlerFunc {
 	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
@@ -235,9 +227,7 @@ func pct(cur, total int64) float64 {
 	return float64(cur) / float64(total) * 100
 }
 
-// ---- gallery-dl config & cookies ---------------------------------------------
-
-func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message
 	uid := userID(m)
 	if uid <= 0 {
@@ -249,15 +239,14 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		a.reply(ctx, m, "Storage error: "+code(err.Error()))
 		return
 	}
-	confPath, cookiePath := filepath.Join(dir, "gallery-dl.conf"), filepath.Join(dir, "cookies.txt")
+	cookiePath := filepath.Join(dir, "cookies.txt")
 	if t := tokens(m); len(t) > 0 && (strings.EqualFold(t[0], "delete") || strings.EqualFold(t[0], "clear")) {
-		_ = os.Remove(confPath)
 		_ = os.Remove(cookiePath)
-		a.reply(ctx, m, "Deleted your gallery-dl configuration and cookies.")
+		a.reply(ctx, m, "Deleted your cookies.")
 		return
 	}
 	if _, f := mediaSource(m); f != nil {
-		tmp, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_conf_")
+		tmp, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_up_")
 		if err != nil {
 			a.reply(ctx, m, "Storage error: "+code(err.Error()))
 			return
@@ -278,7 +267,7 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			return
 		}
 		if st.Size() > 2<<20 {
-			a.reply(ctx, m, "File too large: configuration and cookies files must be under 2 MiB.")
+			a.reply(ctx, m, "File too large: cookies file must be under 2 MiB.")
 			return
 		}
 		data, err := os.ReadFile(p)
@@ -286,25 +275,11 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			a.reply(ctx, m, "Could not read the file: "+code(err.Error()))
 			return
 		}
-		name := strings.ToLower(f.Name)
-		if strings.Contains(name, "cookie") || strings.HasSuffix(name, ".txt") {
-			if err := os.WriteFile(cookiePath, data, 0o600); err != nil {
-				a.reply(ctx, m, "Save failed: "+code(err.Error()))
-				return
-			}
-			a.reply(ctx, m, "Saved your <code>cookies.txt</code>. It is used by gallery-dl, cyberdrop-dl and the forum scraper.")
-			return
-		}
-		var probe map[string]any
-		if err := json.Unmarshal(data, &probe); err != nil {
-			a.reply(ctx, m, "That is not valid JSON: "+code(err.Error()))
-			return
-		}
-		if err := os.WriteFile(confPath, data, 0o600); err != nil {
+		if err := os.WriteFile(cookiePath, data, 0o600); err != nil {
 			a.reply(ctx, m, "Save failed: "+code(err.Error()))
 			return
 		}
-		a.reply(ctx, m, "Saved your gallery-dl configuration.")
+		a.reply(ctx, m, "Saved your cookies.txt. It is used by gallery-dl and cyberdrop-dl.")
 		return
 	}
 	has := func(p string) string {
@@ -313,116 +288,13 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		}
 		return "not set"
 	}
-	a.reply(ctx, m, fmt.Sprintf("<b>gallery-dl settings</b>\n• Config: %s\n• Cookies: %s\n\nReply to a <code>gallery-dl.conf</code> (JSON) or <code>cookies.txt</code> file with <code>/gdlconf</code> to save it, or use <code>/gdlconf delete</code>.",
-		code(has(confPath)), code(has(cookiePath))))
+	a.reply(ctx, m, fmt.Sprintf("<b>Cookies</b>: %s\n\nReply to a <code>cookies.txt</code> file with <code>/cookies</code> to save it, or use <code>/cookies delete</code>.",
+		code(has(cookiePath))))
 }
 
-// ---- APK patching ---------------------------------------------------------------
-
-func (a *App) cmdKeystore(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
-	m := u.Message
-	uid := userID(m)
-	if uid <= 0 {
-		a.reply(ctx, m, "Could not determine your user ID.")
-		return
-	}
-	dir, err := a.cfg.UserDir(uid)
-	if err != nil {
-		a.reply(ctx, m, "Storage error: "+code(err.Error()))
-		return
-	}
-	args := tokens(m)
-	cfgFile := filepath.Join(dir, "keystore_config.json")
-	if len(args) > 0 && (strings.EqualFold(args[0], "delete") || strings.EqualFold(args[0], "remove") || strings.EqualFold(args[0], "clear")) {
-		for _, pat := range []string{"*.jks", "*.keystore"} {
-			old, _ := filepath.Glob(filepath.Join(dir, pat))
-			for _, f := range old {
-				_ = os.Remove(f)
-			}
-		}
-		_ = os.Remove(cfgFile)
-		a.reply(ctx, m, "Your JKS keystore and credentials have been deleted.")
-		return
-	}
-	usage := "<code>/setkeystore &lt;store_password&gt; &lt;key_alias&gt; [key_password]</code>"
-	if _, f := mediaSource(m); f != nil {
-		lower := strings.ToLower(f.Name)
-		if !strings.HasSuffix(lower, ".jks") && !strings.HasSuffix(lower, ".keystore") {
-			a.reply(ctx, m, "Please provide a valid <code>.jks</code> or <code>.keystore</code> file.")
-			return
-		}
-		if len(args) < 2 {
-			a.reply(ctx, m, "<b>Missing passwords/alias.</b> Usage when replying to or attaching the file:\n"+usage)
-			return
-		}
-		storePass, alias := args[0], args[1]
-		keyPass := storePass
-		if len(args) > 2 {
-			keyPass = args[2]
-		}
-		for _, pat := range []string{"*.jks", "*.keystore"} {
-			old, _ := filepath.Glob(filepath.Join(dir, pat))
-			for _, x := range old {
-				_ = os.Remove(x)
-			}
-		}
-		saved, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: "keystore.jks", Size: f.Size}, dir, nil)
-		if err != nil {
-			a.reply(ctx, m, "Failed to save keystore: "+code(err.Error()))
-			return
-		}
-		_ = os.Chmod(saved, 0o600)
-		b, _ := json.MarshalIndent(map[string]string{"store_pass": storePass, "key_alias": alias, "key_pass": keyPass}, "", "  ")
-		if err := os.WriteFile(cfgFile, b, 0o600); err != nil {
-			a.reply(ctx, m, "Failed to save credentials: "+code(err.Error()))
-			return
-		}
-		_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID}) // remove the message containing passwords
-		a.tg.Send(ctx, m.Chat.ID, fmt.Sprintf("<b>JKS keystore saved.</b>\n• Alias: %s\n\nYou can now use /patch.", code(alias)), tg.SendOpts{})
-		return
-	}
-	if ks := a.cfg.UserKeystore(uid); ks != nil {
-		a.reply(ctx, m, fmt.Sprintf("<b>JKS keystore</b>: set (%s)\n• Alias: %s\n\nTo update, reply to a new <code>.jks</code> with:\n%s\nTo remove: <code>/setkeystore delete</code>",
-			code(filepath.Base(ks.Path)), code(ks.KeyAlias), usage))
-		return
-	}
-	a.reply(ctx, m, "<b>JKS keystore setup</b>\n\nUpload your <code>.jks</code> file and reply to it with:\n"+usage)
+func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+	a.reply(ctx, u.Message, "config files are no longer supported; use /cookies")
 }
-
-func (a *App) cmdPatch(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
-	m := u.Message
-	uid := userID(m)
-	if uid <= 0 {
-		a.reply(ctx, m, "Could not determine your user ID; patching needs an identified user.")
-		return
-	}
-	if a.cfg.UserKeystore(uid) == nil {
-		a.reply(ctx, m, "<b>No JKS keystore found.</b> Set one first:\n<code>/setkeystore &lt;store_password&gt; &lt;key_alias&gt; [key_password]</code> (reply to your <code>.jks</code>).")
-		return
-	}
-	args := dl.Args{OriginalFilename: "app.apk"}
-	target := "patch:"
-	if _, f := mediaSource(m); f != nil {
-		args.TGFile = f
-		if f.Name != "" {
-			args.OriginalFilename = f.Name
-		}
-		target += "tg:" + f.Name
-	} else if t := tokens(m); len(t) > 0 && strings.HasPrefix(t[0], "http") {
-		raw := strings.Replace(t[0], "pixeldrain.com/u/", "pixeldrain.com/api/file/", 1)
-		args.TargetURL = raw
-		if base := filepath.Base(strings.SplitN(t[0], "?", 2)[0]); strings.HasSuffix(strings.ToLower(base), ".apk") {
-			args.OriginalFilename = base
-		}
-		target += raw
-	} else {
-		a.reply(ctx, m, "<b>Invalid usage.</b>\n1. Reply to an APK with <code>/patch</code>\n2. Send an APK with the caption <code>/patch</code>\n3. <code>/patch &lt;URL&gt;</code>")
-		return
-	}
-	a.enqueue(ctx, m, target, args)
-}
-
-// ---- torrent search -----------------------------------------------------------------
 
 func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message

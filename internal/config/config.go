@@ -1,5 +1,3 @@
-// Package config loads and validates process configuration from the
-// environment (optionally seeded from a .env file).
 package config
 
 import (
@@ -14,22 +12,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config holds every runtime setting. Always construct through Load.
 type Config struct {
-	// Telegram credentials.
 	APIID    int
 	APIHash  string
 	BotToken string
-	// BotAPIURL points at a self-hosted telegram-bot-api server started with
-	// --local. It is required for transfers above the 50MB cloud Bot API limit.
+
 	BotAPIURL string
-	// BotAPILocalDirMap maps host paths to paths visible to a local
-	// telegram-bot-api server container, e.g. "hostprefix=containerprefix".
+
 	BotAPILocalDirMap    string
 	LocalHostPrefix      string
 	LocalContainerPrefix string
 
-	// Upload hosts.
 	PixeldrainAPIKey string
 	PixeldrainDomain string
 	GofileAPIKey     string
@@ -40,28 +33,17 @@ type Config struct {
 	ForceIPv6        bool
 	SourceAddress    string
 
-	// APK patcher keystore.
-	KeystorePath string
-	KeystorePass string
-	KeyAlias     string
-	KeyPass      string
-
-	// Storage.
 	DataDir string
 	AuthDir string
 	LogDir  string
 
-	// Google Drive.
 	GDriveTokenPath   string
 	GDriveAccountsDir string
 	UseServiceAccts   bool
 
-	// MEGA.
 	MegaEmail    string
 	MegaPassword string
 
-	// gallery-dl.
-	GDLConfigPath      string
 	GDLSleepMin        float64
 	GDLSleepMax        float64
 	GDLSleepRequest    string
@@ -70,8 +52,6 @@ type Config struct {
 	GDLBackoffBase     time.Duration
 	GDLBackoffMultiple float64
 
-	// cyberdrop-dl.
-	CDLConfigPath      string
 	CDLRetries         int
 	CDLMaxRunRetries   int
 	CDLBackoffBase     time.Duration
@@ -80,7 +60,6 @@ type Config struct {
 	GlobalSpeedLimit string
 	HLSTimeout       time.Duration
 
-	// Telegram upload pacing.
 	TGUploadDelayMin   time.Duration
 	TGUploadDelayMax   time.Duration
 	TGBatchSize        int
@@ -91,7 +70,6 @@ type Config struct {
 	MaxConcurrentHeavy int
 	AlbumMaxTotalBytes int64
 
-	// Heavy tool & extraction limits.
 	ExtractThreads   int
 	ArchiveThreads   int
 	ArchiveZipLevel  int
@@ -99,25 +77,20 @@ type Config struct {
 	MaxExtractFiles  int
 	MinFreeDiskBytes int64
 
-	// Bot API Data directory.
 	BotAPIDataDir string
 
-	// Memory limit.
 	MemoryLimitMB int64
 
-	// Torrents.
 	TorrentTimeout      time.Duration
 	SearchLimit         int
 	MagnetioURL         string
 	MagnetioSecret      string
 	AriaMaxConcurrentDL int
 
-	// Access control.
 	OwnerID       int64
 	HasOwner      bool
 	AuthorizedIDs []int64
 
-	// Limits.
 	MaxJobsPerChat       int
 	MaxTotalDownloadsB   int64
 	HasMaxTotalDownloads bool
@@ -130,9 +103,8 @@ type Config struct {
 
 const defaultOwnerID int64 = 1623457379
 
-// Load reads .env (if present) and the process environment.
 func Load() (*Config, error) {
-	_ = godotenv.Load() // an absent .env is fine
+	_ = godotenv.Load()
 
 	c := &Config{
 		APIID:             envInt("TG_API_ID", 0),
@@ -151,11 +123,6 @@ func Load() (*Config, error) {
 		ForceIPv6:        envBool("FORCE_IPV6", false),
 		SourceAddress:    envStr("SOURCE_ADDRESS", ""),
 
-		KeystorePath: envStr("KEYSTORE_PATH", ""),
-		KeystorePass: envStr("KEYSTORE_PASS", ""),
-		KeyAlias:     envStr("KEY_ALIAS", ""),
-		KeyPass:      envStr("KEY_PASS", ""),
-
 		DataDir: envStr("DATA_DIR", "./data"),
 		AuthDir: envStr("AUTH_DIR", "./auth"),
 		LogDir:  envStr("LOG_DIR", "./logs"),
@@ -167,7 +134,6 @@ func Load() (*Config, error) {
 		MegaEmail:    envStr("MEGA_EMAIL", ""),
 		MegaPassword: envStr("MEGA_PASSWORD", ""),
 
-		GDLConfigPath:      envStr("GDL_CONFIG_PATH", "./configs/gallery-dl.conf"),
 		GDLSleepMin:        envFloat("GDL_SLEEP_MIN", 1.5),
 		GDLSleepMax:        envFloat("GDL_SLEEP_MAX", 4.0),
 		GDLSleepRequest:    envStr("GDL_SLEEP_REQUEST", "1-3"),
@@ -176,7 +142,6 @@ func Load() (*Config, error) {
 		GDLBackoffBase:     envSeconds("GDL_BACKOFF_BASE_S", 30),
 		GDLBackoffMultiple: envFloat("GDL_BACKOFF_MULTIPLIER", 2.5),
 
-		CDLConfigPath:      envStr("CDL_CONFIG_PATH", "./configs/cyberdrop-dl.yaml"),
 		CDLRetries:         envInt("CDL_RETRIES", 3),
 		CDLMaxRunRetries:   envInt("CDL_MAX_RUN_RETRIES", 3),
 		CDLBackoffBase:     envSeconds("CDL_BACKOFF_BASE_S", 30),
@@ -250,7 +215,6 @@ func Load() (*Config, error) {
 		c.LogLevel = "INFO"
 	}
 
-	// Absolute paths matter: several tools run with a different working directory.
 	for _, p := range []*string{&c.DataDir, &c.AuthDir, &c.LogDir} {
 		abs, err := filepath.Abs(*p)
 		if err != nil {
@@ -266,7 +230,6 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
-// ParseLocalDirMap parses "hostprefix=containerprefix" into (hostPrefix, containerPrefix, ok).
 func ParseLocalDirMap(raw string) (string, string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -284,14 +247,10 @@ func ParseLocalDirMap(raw string) (string, string, bool) {
 	return hp, cp, true
 }
 
-// LocalDirMap parses TG_BOT_API_LOCAL_DIR_MAP into host and container prefixes.
 func (c *Config) LocalDirMap() (hostPrefix, containerPrefix string, ok bool) {
 	return ParseLocalDirMap(c.BotAPILocalDirMap)
 }
 
-// UploadLimit is the largest single file (bytes) the configured Bot API
-// endpoint accepts: ~2000MB via a self-hosted --local server, otherwise the
-// 50MB cloud limit (with headroom).
 func (c *Config) UploadLimit() int64 {
 	if c.BotAPIURL != "" {
 		return 195 * 1024 * 1024 * 1024 / 100
@@ -299,7 +258,6 @@ func (c *Config) UploadLimit() int64 {
 	return 49 * 1024 * 1024
 }
 
-// Validate reports missing mandatory Telegram credentials.
 func (c *Config) Validate() error {
 	var missing []string
 	if c.APIID == 0 {
@@ -322,50 +280,9 @@ func (c *Config) GDLArchivePath() string { return filepath.Join(c.DataDir, "gdl_
 func (c *Config) CDLArchivePath() string { return filepath.Join(c.DataDir, "cdl_archive.db") }
 func (c *Config) DownloadsDir() string   { return filepath.Join(c.DataDir, "downloads") }
 
-// UserDir returns the per-user auth directory, creating it on demand.
 func (c *Config) UserDir(userID int64) (string, error) {
 	dir := filepath.Join(c.AuthDir, strconv.FormatInt(userID, 10))
 	return dir, os.MkdirAll(dir, 0o700)
-}
-
-// KeystoreInfo describes a JKS keystore used for APK signing.
-type KeystoreInfo struct {
-	Path      string
-	StorePass string
-	KeyAlias  string
-	KeyPass   string
-}
-
-// UserKeystore resolves a per-user keystore, then the global one, then the
-// conventional fallback locations. It returns nil when none is configured.
-func (c *Config) UserKeystore(userID int64) *KeystoreInfo {
-	if userID > 0 {
-		dir := filepath.Join(c.AuthDir, strconv.FormatInt(userID, 10))
-		if info := readUserKeystore(dir); info != nil {
-			return info
-		}
-	}
-	var candidates []string
-	if c.KeystorePath != "" {
-		candidates = append(candidates, c.KeystorePath)
-	}
-	candidates = append(candidates,
-		filepath.Join(c.AuthDir, "keystore.jks"),
-		filepath.Join(c.DataDir, "keystore.jks"))
-	for _, p := range candidates {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			continue
-		}
-		if st, err := os.Stat(abs); err == nil && st.Mode().IsRegular() {
-			kp := c.KeyPass
-			if kp == "" {
-				kp = c.KeystorePass
-			}
-			return &KeystoreInfo{Path: abs, StorePass: c.KeystorePass, KeyAlias: c.KeyAlias, KeyPass: kp}
-		}
-	}
-	return nil
 }
 
 func parseIDList(raw string) []int64 {

@@ -23,8 +23,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 )
 
-// Manager schedules jobs and runs the download → post-process → upload
-// pipeline. One goroutine group per job; global semaphores bound concurrency.
 type Manager struct {
 	d       *Deps
 	sources []Source
@@ -43,7 +41,6 @@ type Manager struct {
 	stop      context.CancelFunc
 }
 
-// NewManager wires a manager. lim is shared with the Telegram-facing code.
 func NewManager(d *Deps, lim *pacing.TelegramLimiter) *Manager {
 	media.SetTempDir(filepath.Join(d.Cfg.DataDir, "tmp"))
 	mcHeavy := int64(1)
@@ -70,7 +67,6 @@ func NewManager(d *Deps, lim *pacing.TelegramLimiter) *Manager {
 	}
 }
 
-// Start resumes unfinished jobs and begins background maintenance.
 func (m *Manager) Start(ctx context.Context) error {
 	m.root, m.stop = context.WithCancel(ctx)
 	pending, err := m.d.Store.ResumableJobs(ctx)
@@ -102,7 +98,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels running jobs and waits briefly for them to wind down.
 func (m *Manager) Stop() {
 	if m.stop != nil {
 		m.stop()
@@ -116,8 +111,6 @@ func (m *Manager) Stop() {
 	}
 }
 
-// RegisterTempDir marks a temporary directory as active so cleanupOrphans will not delete it.
-// It returns a release function that should be deferred until the directory is removed or no longer active.
 func (m *Manager) RegisterTempDir(path string) func() {
 	base := filepath.Base(path)
 	m.activeTmp.Store(base, struct{}{})
@@ -136,7 +129,6 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		base := j.DownloadDir()
 		live[base] = true
 		live[base+"_extract"] = true
-		live[base+"_patch_work"] = true
 		live[base+"_pd_temp"] = true
 		live[j.MirrorTempDirName()] = true
 	}
@@ -145,7 +137,6 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		base := s.Job().DownloadDir()
 		live[base] = true
 		live[base+"_extract"] = true
-		live[base+"_patch_work"] = true
 		live[base+"_pd_temp"] = true
 		live[s.Job().MirrorTempDirName()] = true
 	}
@@ -162,16 +153,14 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		}
 		isTarget := strings.HasPrefix(name, "job_") ||
 			strings.HasSuffix(name, "_extract") ||
-			strings.HasSuffix(name, "_patch_work") ||
 			strings.HasPrefix(name, "tmp_up_") ||
-			strings.HasPrefix(name, "tmp_conf_") ||
 			strings.HasSuffix(name, "_pd_temp")
 
 		if !isTarget || live[name] {
 			continue
 		}
 
-		if strings.HasPrefix(name, "tmp_up_") || strings.HasPrefix(name, "tmp_conf_") {
+		if strings.HasPrefix(name, "tmp_up_") {
 			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < 6*time.Hour {
 				continue
 			}
@@ -222,7 +211,6 @@ func (m *Manager) activeChats() map[int64]bool {
 	return out
 }
 
-// Add schedules a job that already exists in the store.
 func (m *Manager) Add(id string) {
 	m.wg.Add(1)
 	go func() {
@@ -231,8 +219,6 @@ func (m *Manager) Add(id string) {
 	}()
 }
 
-// Cancel aborts a running job. It returns false when the job is not running
-// (the caller should then just mark it cancelled in the store).
 func (m *Manager) Cancel(id string) bool {
 	m.mu.Lock()
 	st := m.states[id]
@@ -246,14 +232,12 @@ func (m *Manager) Cancel(id string) bool {
 	return true
 }
 
-// State returns the live state of a running job, or nil.
 func (m *Manager) State(id string) *State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.states[id]
 }
 
-// Running returns live states, optionally filtered to one chat (0 = all).
 func (m *Manager) Running(chatID int64) []*State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -266,14 +250,10 @@ func (m *Manager) Running(chatID int64) []*State {
 	return out
 }
 
-// Render produces the current card for a running job.
 func (m *Manager) Render(st *State) string {
 	return status.Job(st.Snapshot(st.Job(), m.d.Cfg.ShowSystemStats))
 }
 
-// ---- interactive callbacks -------------------------------------------------
-
-// SetArchiveChoice resolves the archive prompt; it returns the file name.
 func (m *Manager) SetArchiveChoice(jobID, archiveID, choice string) (string, bool) {
 	st := m.State(jobID)
 	if st == nil {
@@ -284,7 +264,6 @@ func (m *Manager) SetArchiveChoice(jobID, archiveID, choice string) (string, boo
 	return filepath.Base(name), true
 }
 
-// SetAudioChoice resolves the audio-conversion prompt.
 func (m *Manager) SetAudioChoice(jobID, convID, choice string) (string, bool) {
 	st := m.State(jobID)
 	if st == nil {
@@ -295,7 +274,6 @@ func (m *Manager) SetAudioChoice(jobID, convID, choice string) (string, bool) {
 	return name, true
 }
 
-// DeliverPassword routes a reply to a password prompt to the waiting job.
 func (m *Manager) DeliverPassword(chatID int64, replyToMsgID int, password string) bool {
 	for _, st := range m.Running(chatID) {
 		if st.sess.deliverPassword(replyToMsgID, password) {
@@ -305,7 +283,6 @@ func (m *Manager) DeliverPassword(chatID int64, replyToMsgID int, password strin
 	return false
 }
 
-// IsStatusMessage reports whether msgID in chatID is an active status message for any running job.
 func (m *Manager) IsStatusMessage(chatID int64, msgID int) bool {
 	if msgID == 0 {
 		return false
@@ -322,8 +299,6 @@ func (m *Manager) IsStatusMessage(chatID int64, msgID int) bool {
 	}
 	return false
 }
-
-// ---- job lifecycle -----------------------------------------------------------
 
 func (m *Manager) run(id string) {
 	job, err := m.d.Store.GetJob(m.root, id)
@@ -476,7 +451,6 @@ func (m *Manager) render(st *State, force bool) {
 	st.mu.Unlock()
 }
 
-// send is a best-effort notification that never fails the job.
 func (m *Manager) send(st *State, html string, o tg.SendOpts) tg.MessageRef {
 	ctx := st.ctx
 	if ctx.Err() != nil {
@@ -516,10 +490,8 @@ func (m *Manager) delLater(ref tg.MessageRef, d time.Duration) {
 	time.AfterFunc(d, func() { m.del(ref) })
 }
 
-// ---- download stage ---------------------------------------------------------
-
 func pickSource(srcs []Source, r *Request) Source {
-	// An explicit engine choice (from the command used) beats URL sniffing.
+
 	if e := r.Args.Engine; e != "" {
 		for _, s := range srcs {
 			if s.Name() == e {
@@ -545,7 +517,6 @@ func (m *Manager) downloadStage(st *State) {
 	defer m.dlSem.Release(1)
 	m.setStatus(st, store.StatusDownloading)
 
-	// Check free disk space before starting
 	if free, err := fsutil.FreeDiskSpace(m.d.Cfg.DownloadsDir()); err == nil {
 		if int64(free) < m.d.Cfg.MinFreeDiskBytes {
 			errMsg := fmt.Sprintf("insufficient free disk space before download: %s free, %s required",
@@ -565,7 +536,6 @@ func (m *Manager) downloadStage(st *State) {
 	src := pickSource(m.sources, req)
 	slog.Info("starting download", "job", job.ID, "source", src.Name())
 
-	// Every 5s during download, check free disk space
 	diskCtx, cancelDisk := context.WithCancel(st.ctx)
 	defer cancelDisk()
 	go func() {
@@ -682,7 +652,6 @@ func (m *Manager) monitorDisk(ctx context.Context, st *State) {
 				return
 			}
 
-			// Adaptive interval: 2s when < 500 files, up to 10s when > 5000 files
 			if fileCount < 500 {
 				interval = 2 * time.Second
 			} else if fileCount >= 5000 {
@@ -696,8 +665,6 @@ func (m *Manager) monitorDisk(ctx context.Context, st *State) {
 	}
 }
 
-// archiveAll compresses every top-level folder (and loose files) into archives
-// so they upload as a small number of files.
 func (m *Manager) archiveAll(st *State, args dl.Args) error {
 	entries, err := os.ReadDir(st.Dest)
 	if err != nil {
@@ -752,13 +719,10 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 	return nil
 }
 
-// ---- finalisation -------------------------------------------------------------
-
 func (m *Manager) finalize(st *State) {
 	job := st.Job()
 	ctx := context.Background()
 
-	// Wait for background Pixeldrain mirroring if any, with a deadline and honoring cancellation
 	mirrorDone := make(chan struct{})
 	go func() {
 		st.mirrorWG.Wait()
@@ -795,7 +759,7 @@ func (m *Manager) finalize(st *State) {
 		final = store.StatusCancelled
 		text = fmt.Sprintf("<b>Job #%s Cancelled</b>\n<blockquote>Cancelled by user.</blockquote>", status.Esc(job.ID))
 	case m.root.Err() != nil && fatal == "":
-		// Shutting down: leave the job resumable.
+
 		slog.Info("job interrupted by shutdown; will resume on restart", "job", job.ID)
 		return
 	case fatal != "":

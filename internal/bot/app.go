@@ -1,4 +1,3 @@
-// Package bot wires Telegram updates to commands and the job manager.
 package bot
 
 import (
@@ -27,7 +26,6 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// App holds everything the handlers need.
 type App struct {
 	cfg           *config.Config
 	auth          *auth.Authorizer
@@ -45,7 +43,6 @@ type App struct {
 	botID         int64
 }
 
-// Deps groups constructor arguments.
 type Deps struct {
 	Cfg       *config.Config
 	Auth      *auth.Authorizer
@@ -59,9 +56,6 @@ type Deps struct {
 	Telegraph *telegraph.Helper
 }
 
-// New builds the Telegram bot, registers all handlers and returns the app and
-// the underlying bot (whose Start blocks until ctx is cancelled). The jobs
-// manager needs a tg.Client, so callers construct the bot first via NewClient.
 func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	tele := d.Telegraph
 	if tele == nil {
@@ -116,8 +110,6 @@ func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFi
 	}()
 }
 
-// NewClient creates the Telegram bot with the auth middleware and returns it
-// together with its tg.Client adapter.
 func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.HandlerFunc) (*tgbot.Bot, *tg.BotAPI, error) {
 	opts := []tgbot.Option{
 		tgbot.WithMiddlewares(authMiddleware(authz)),
@@ -190,7 +182,6 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"dl", "direct"}, a.cmdDirect)
 	cmd([]string{"gdl", "gallerydl"}, a.cmdEngine("gallery-dl", "gdl"))
 	cmd([]string{"cdl", "cyberdropdl"}, a.cmdEngine("cyberdrop-dl", "cdl"))
-	cmd([]string{"xenforo", "forum", "xfdl"}, a.cmdEngine("xenforo", "xenforo"))
 	cmd([]string{"mega", "meganz"}, a.cmdMega)
 	cmd([]string{"tor"}, a.cmdTorrent)
 	cmd([]string{"aria"}, a.cmdAria)
@@ -202,9 +193,8 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"fileditch", "fdup"}, a.cmdHostUpload("fileditch"))
 	cmd([]string{"gofilekey", "gofile_key"}, a.cmdKey("gofile", "GoFile"))
 	cmd([]string{"pdkey", "pixeldrainkey", "pd_key"}, a.cmdKey("pixeldrain", "Pixeldrain"))
+	cmd([]string{"cookies"}, a.cmdCookies)
 	cmd([]string{"gdlconf"}, a.cmdGDLConf)
-	cmd([]string{"patch"}, a.cmdPatch)
-	cmd([]string{"setkeystore", "keystore"}, a.cmdKeystore)
 
 	cb := func(prefix string, h tgbot.HandlerFunc) {
 		b.RegisterHandler(tgbot.HandlerTypeCallbackQueryData, prefix, tgbot.MatchTypePrefix, h)
@@ -216,8 +206,6 @@ func (a *App) register(b *tgbot.Bot) {
 	cb("status:", a.cbStatus)
 }
 
-// Default handles everything not matched by a command: password replies,
-// captioned /patch and /setkeystore uploads, and cleanup of service messages.
 func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	m := u.Message
 	if m == nil {
@@ -250,25 +238,23 @@ func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	}
 	if m.Caption != "" && strings.HasPrefix(m.Caption, "/") {
 		switch commandOf(m.Caption) {
-		case "patch":
-			a.cmdPatch(ctx, b, u)
-			return
-		case "setkeystore", "keystore":
-			a.cmdKeystore(ctx, b, u)
-			return
 		case "unzip":
 			a.cmdUnzip(ctx, b, u)
+			return
+		case "cookies":
+			a.cmdCookies(ctx, b, u)
+			return
+		case "gdlconf":
+			a.cmdGDLConf(ctx, b, u)
 			return
 		}
 	}
 	if m.ReplyToMessage != nil && m.Text != "" && !strings.HasPrefix(m.Text, "/") {
 		if a.mgr.DeliverPassword(m.Chat.ID, m.ReplyToMessage.ID, strings.TrimSpace(m.Text)) {
-			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID}) // do not leave passwords in chat
+			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID})
 		}
 	}
 }
-
-// ---- shared helpers ---------------------------------------------------------
 
 func commandOf(text string) string {
 	f := strings.Fields(text)
@@ -282,7 +268,6 @@ func commandOf(text string) string {
 	return strings.ToLower(c)
 }
 
-// args returns the whitespace-split tokens after the command.
 func textOf(m *models.Message) string {
 	if m.Text != "" {
 		return m.Text
@@ -342,7 +327,6 @@ func (a *App) replyKB(ctx context.Context, m *models.Message, html string, kb tg
 func esc(s string) string  { return status.Esc(s) }
 func code(s string) string { return status.Code(s) }
 
-// mediaOf extracts a downloadable file reference from a message.
 func mediaOf(m *models.Message) *dl.TGFile {
 	if m == nil {
 		return nil
@@ -369,8 +353,6 @@ func mediaOf(m *models.Message) *dl.TGFile {
 	return nil
 }
 
-// replied returns the message being replied to, or the message itself when it
-// carries media (captioned uploads).
 func mediaSource(m *models.Message) (*models.Message, *dl.TGFile) {
 	if f := mediaOf(m.ReplyToMessage); f != nil {
 		return m.ReplyToMessage, f
@@ -381,7 +363,6 @@ func mediaSource(m *models.Message) (*models.Message, *dl.TGFile) {
 	return nil, nil
 }
 
-// enqueue creates and schedules a job, honouring the per-chat limit.
 func (a *App) enqueue(ctx context.Context, m *models.Message, target string, args dl.Args) {
 	active, err := a.store.ActiveJobsForChat(ctx, m.Chat.ID)
 	if err != nil {
@@ -408,7 +389,7 @@ func (a *App) enqueue(ctx context.Context, m *models.Message, target string, arg
 }
 
 var urlPrefixes = []string{"http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:",
-	"gf2tg:", "xenforo:", "simpcity:", "forum:", "fpd:", "cdl:", "direct:"}
+	"gf2tg:", "fpd:", "cdl:", "direct:"}
 
 func isURLToken(t string) bool {
 	for _, p := range urlPrefixes {
@@ -419,7 +400,6 @@ func isURLToken(t string) bool {
 	return false
 }
 
-// flags mirrors the original flag grammar: -m, -tg, -uz, -p <password>.
 type flags struct {
 	Mirror, TG, Unzip bool
 	Password          string
@@ -449,6 +429,26 @@ func parseFlags(toks []string) flags {
 			f.Password = strings.TrimSpace(t[strings.Index(t, "=")+1:])
 		case isURLToken(t):
 			f.URLs = append(f.URLs, t)
+		case low == "-c" || low == "--config" || low == "--config-file":
+			if i+1 < len(toks) && !strings.HasPrefix(toks[i+1], "-") {
+				i++
+			}
+		case strings.HasPrefix(low, "-c=") || strings.HasPrefix(low, "--config=") || strings.HasPrefix(low, "--config-file="):
+		case low == "-o" || low == "--option":
+			if i+1 < len(toks) {
+				next := strings.TrimSpace(toks[i+1])
+				if dl.PointsToFile(next) {
+					i++
+				} else {
+					f.Extra = append(f.Extra, t, next)
+					i++
+				}
+			}
+		case strings.HasPrefix(low, "-o=") || strings.HasPrefix(low, "--option="):
+			val := t[strings.Index(t, "=")+1:]
+			if !dl.PointsToFile(val) {
+				f.Extra = append(f.Extra, t)
+			}
 		default:
 			if strings.HasPrefix(t, "-") {
 				f.Extra = append(f.Extra, t)
@@ -458,7 +458,6 @@ func parseFlags(toks []string) flags {
 	return f
 }
 
-// jobTarget encodes one or many URLs the way the sources expect.
 func jobTarget(urls []string) string {
 	if len(urls) == 1 {
 		return urls[0]

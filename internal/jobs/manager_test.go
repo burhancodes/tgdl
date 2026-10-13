@@ -40,10 +40,8 @@ func TestCleanupOrphans(t *testing.T) {
 		liveJob.MirrorTempDirName(),
 		deadJob.DownloadDir(),
 		deadJob.DownloadDir() + "_extract",
-		deadJob.DownloadDir() + "_patch_work",
 		deadJob.MirrorTempDirName(),
 		"tmp_up_abc",
-		"tmp_conf_xyz",
 		"tmp_up_active",
 		"important_folder",
 	}
@@ -57,14 +55,12 @@ func TestCleanupOrphans(t *testing.T) {
 		_ = os.Chtimes(p, oldTime, oldTime)
 	}
 
-	// Register tmp_up_active with activeTmp
 	release := m.RegisterTempDir(filepath.Join(downloads, "tmp_up_active"))
 
 	keep := []*store.Job{liveJob}
 
 	m.cleanupOrphans(keep)
 
-	// Check which should exist
 	shouldExist := map[string]bool{
 		liveJob.DownloadDir():              true,
 		liveJob.DownloadDir() + "_extract": true,
@@ -76,10 +72,8 @@ func TestCleanupOrphans(t *testing.T) {
 	shouldNotExist := []string{
 		deadJob.DownloadDir(),
 		deadJob.DownloadDir() + "_extract",
-		deadJob.DownloadDir() + "_patch_work",
 		deadJob.MirrorTempDirName(),
 		"tmp_up_abc",
-		"tmp_conf_xyz",
 	}
 
 	for d := range shouldExist {
@@ -96,7 +90,6 @@ func TestCleanupOrphans(t *testing.T) {
 		}
 	}
 
-	// Release active temp dir and assert it is removed on next cleanupOrphans
 	release()
 	m.cleanupOrphans(keep)
 	activePath := filepath.Join(downloads, "tmp_up_active")
@@ -111,56 +104,53 @@ type mockPinTGClient struct {
 	pins   []tg.MessageRef
 	unpins []tg.MessageRef
 	pinErr error
-	nextID int
 }
 
-func (c *mockPinTGClient) Send(ctx context.Context, chatID int64, text string, o tg.SendOpts) (tg.MessageRef, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.nextID++
-	return tg.MessageRef{ChatID: chatID, ID: c.nextID}, nil
+func (m *mockPinTGClient) Send(_ context.Context, chatID int64, _ string, _ tg.SendOpts) (tg.MessageRef, error) {
+	return tg.MessageRef{ChatID: chatID, ID: 555}, nil
 }
 
-func (c *mockPinTGClient) Edit(ctx context.Context, ref tg.MessageRef, text string, o tg.SendOpts) error {
+func (m *mockPinTGClient) Edit(_ context.Context, ref tg.MessageRef, _ string, _ tg.SendOpts) error {
 	return nil
 }
 
-func (c *mockPinTGClient) Pin(ctx context.Context, ref tg.MessageRef) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pins = append(c.pins, ref)
-	return c.pinErr
-}
-
-func (c *mockPinTGClient) Unpin(ctx context.Context, ref tg.MessageRef) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.unpins = append(c.unpins, ref)
+func (m *mockPinTGClient) Pin(_ context.Context, ref tg.MessageRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pins = append(m.pins, ref)
+	if m.pinErr != nil {
+		return m.pinErr
+	}
 	return nil
 }
 
-func (c *mockPinTGClient) Delete(ctx context.Context, ref tg.MessageRef) error {
+func (m *mockPinTGClient) Unpin(_ context.Context, ref tg.MessageRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unpins = append(m.unpins, ref)
 	return nil
 }
 
-func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
-	ctx := context.Background()
+func TestManager_StatusMessagePinning(t *testing.T) {
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-	st, err := store.Open(ctx, dbPath)
+	cfg := &config.Config{
+		DataDir:          tmpDir,
+		PinStatusMessage: true,
+		ExtractThreads:   1,
+		ArchiveThreads:   1,
+		MinFreeDiskBytes: 1024,
+	}
+
+	st, err := store.Open(context.Background(), filepath.Join(tmpDir, "state.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 
-	cfg := &config.Config{
-		DataDir:          tmpDir,
-		PinStatusMessage: true,
-	}
-
 	mockTG := &mockPinTGClient{}
 	lim := pacing.NewTelegramLimiter()
 
+	ctx := context.Background()
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
 
@@ -171,7 +161,6 @@ func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
 		states: map[string]*State{},
 	}
 
-	// 1. New job -> exactly one Pin call
 	job1, err := st.CreateJob(ctx, 111, "https://example.com/file1.zip", false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +175,6 @@ func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
 		t.Errorf("pin ref mismatch: got %+v, want ChatID=111, ID=%d", mockTG.pins[0], st1.msg.ID)
 	}
 
-	// 2. Resuming an existing job (job.StatusMsgID != 0) -> no Pin call
 	mockTG.pins = nil
 	job2, err := st.CreateJob(ctx, 222, "https://example.com/file2.zip", false, "")
 	if err != nil {
@@ -201,7 +189,6 @@ func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
 		t.Fatalf("expected 0 Pin calls when resuming a job, got %d", len(mockTG.pins))
 	}
 
-	// 3. Job finishing normally -> exactly one Unpin call
 	m.finalize(st1)
 	if len(mockTG.unpins) != 1 {
 		t.Fatalf("expected exactly 1 Unpin call for finished job, got %d", len(mockTG.unpins))
@@ -210,10 +197,9 @@ func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
 		t.Errorf("unpin ref mismatch: got %+v, want ChatID=111, ID=%d", mockTG.unpins[0], st1.msg.ID)
 	}
 
-	// 4. Interrupted job by shutdown (rootCtx cancelled) -> no Unpin call
 	mockTG.unpins = nil
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
-	shutdownCancel() // cancel root to simulate shutdown
+	shutdownCancel()
 	mShutdown := &Manager{
 		d:      &Deps{Cfg: cfg, Store: st, TG: mockTG},
 		lim:    lim,
@@ -229,7 +215,6 @@ func TestStatusMessage_PinningAndUnpinning(t *testing.T) {
 		t.Fatalf("expected 0 Unpin calls for shutdown interrupted job, got %d", len(mockTG.unpins))
 	}
 
-	// 5. Pin returning an error does not stop or panic the job
 	mockTG.pins = nil
 	mockTG.pinErr = errors.New("chat_admin_required: can_pin_messages right missing")
 	job4, _ := st.CreateJob(ctx, 444, "https://example.com/file4.zip", false, "")

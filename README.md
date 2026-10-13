@@ -1,7 +1,7 @@
 # tgdl (Go)
 
 A Telegram bot that downloads from direct links, HLS, torrents/magnets, Google Drive, MEGA, GoFile,
-XenForo forums, gallery-dl / cyberdrop-dl sites, and uploads to Telegram or mirrors to GoFile,
+gallery-dl / cyberdrop-dl sites, and uploads to Telegram or mirrors to GoFile,
 FileDitch and Pixeldrain. Go rewrite of the Python `tgdl` project.
 
 ## Architecture
@@ -14,12 +14,11 @@ internal/
   tg                Telegram interface + Bot API adapter (swap MTProto in here only)
   bot               command/callback handlers (thin: parse → enqueue)
   jobs              Manager (queue, per-job State, status card), pipeline, pluggable Sources
-  dl                engines: direct HTTP, HLS, GoFile, gallery-dl/cyberdrop-dl runner, XenForo
+  dl                engines: direct HTTP, HLS, GoFile, gallery-dl/cyberdrop-dl runner
   torrent           aria2 RPC daemon supervisor, tracker list, Magnetio search client
   gdrive, mega      cloud downloaders (MEGA public-link protocol implemented natively)
   upload            GoFile / FileDitch / Pixeldrain uploads, per-user API keys
   archive, media    extraction/creation, split-archive detection, ffmpeg wrappers
-  apk               APKEditor + tgpatcher + uber-apk-signer pipeline
   netguard          SSRF-safe HTTP transport (checks the connected IP, not a pre-resolve)
   pacing, status, fsutil, auth, logging
 ```
@@ -55,7 +54,7 @@ or `docker compose up -d --build`. Configuration keys are unchanged from the Pyt
 (`.env.example`), plus `TG_BOT_API_URL`.
 
 External tools used at runtime: `ffmpeg`, `aria2c`, `7z`/`unrar`/`unzip`, `gallery-dl`,
-`cyberdrop-dl`, `java` + `python3` (APK patching), `node` (torrent-search / forum sidecar in `scraper/`).
+`cyberdrop-dl`, `node` (torrent-search sidecar in `scraper/`).
 
 ## Behaviour notes / known differences
 

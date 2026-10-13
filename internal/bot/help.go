@@ -11,7 +11,6 @@ var helpPages = map[string]string{
 		"• <code>/gofile [-m] [-tg] [-uz] &lt;url…&gt;</code> or <code>/gfdl</code> — GoFile bypass proxy links\n" +
 		"• <code>/gdl</code> — gallery-dl (reply to a .txt of links for batches)\n" +
 		"• <code>/cdl</code> — cyberdrop-dl\n" +
-		"• <code>/xenforo &lt;thread url&gt;</code> — forum threads (needs cookies for private forums)\n" +
 		"• <code>/m [-tg]</code> — mirror a link or replied file to GoFile, FileDitch and Pixeldrain\n" +
 		"<code>-m</code> mirrors to web hosts, <code>-tg</code> also uploads to Telegram, <code>-uz</code> extracts archives.",
 	"tor": "<b>Torrents &amp; aria2</b>\n" +
@@ -28,9 +27,9 @@ var helpPages = map[string]string{
 		"• <code>/gofile &lt;link&gt;</code> — GoFile download via bypass proxy\n" +
 		"• <code>/gfup</code>, <code>/fileditch</code>, <code>/pdup</code> — upload a replied file\n" +
 		"• <code>/gofilekey</code>, <code>/pdkey</code> — store your personal API keys",
-	"config": "<b>Configuration</b>\n" +
-		"• <code>/gdlconf</code> — reply to gallery-dl.conf or cookies.txt to save it\n" +
-		"• <code>/setkeystore</code> and <code>/patch</code> — sign and patch Telegram APKs",
+	"cookies": "<b>Cookies</b>\n" +
+		"• <code>/cookies</code> — reply to cookies.txt to save it (used by gallery-dl and cyberdrop-dl)\n" +
+		"• <code>/cookies delete</code> — delete saved cookies",
 }
 
 func helpPage(page string) (string, tg.Keyboard) {
@@ -42,7 +41,7 @@ func helpPage(page string) (string, tg.Keyboard) {
 	kb := tg.Keyboard{
 		{b("Downloads", "dl"), b("Torrents", "tor")},
 		{b("Archives", "unzip"), b("Cloud", "cloud")},
-		{b("Config", "config")},
+		{b("Cookies", "cookies")},
 	}
 	if page != "main" {
 		kb = append(kb, []tg.Button{b("Back", "main")})

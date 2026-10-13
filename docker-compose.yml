@@ -1,13 +1,4 @@
-# Tuning for host RAM:
-# - Both tgdl and telegram-bot-api are configured with default limits of 3 GB RAM and 2 CPUs.
-# - If your host has less RAM (e.g. 4-6 GB total), adjust BOTAPI_MEM (e.g. 1.5g-2g) and TGDL_MEM (e.g. 1.5g-2g) in your .env.
-# - Note that the telegram-bot-api container may legitimately buffer hundreds of MBs during large multi-hundred-MB or GB uploads/downloads.
-# - GOMEMLIMIT should be set to ~75-80% of TGDL_MEM (default: 2400MiB for 3g limit) so Go's GC aggressively avoids OOM.
-# - oom_score_adj is set to 500 on tgdl so the kernel terminates tgdl before host-critical processes in severe host memory pressure.
-
 services:
-  # A self-hosted Bot API server lifts the cloud Bot API limits (50MB up /
-  # 20MB down) to 2000MB. Get api id/hash from https://my.telegram.org.
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
     restart: unless-stopped
@@ -85,7 +76,6 @@ services:
       - ./data:/app/data
       - ./auth:/app/auth
       - ./logs:/app/logs
-      # Lets the bot read and clean up files the local Bot API server saved.
       - botapi-data:/var/lib/telegram-bot-api:rw
 
 volumes:

@@ -22,15 +22,8 @@ import (
 	"github.com/burhanverse/tgdl/internal/upload"
 )
 
-// ErrToolMissing indicates a required external binary is not installed.
 var ErrToolMissing = errors.New("required tool not found")
 
-// Subprocess engines (gallery-dl, cyberdrop-dl) share URL parsing, per-URL
-// execution and fallback logic. The mutual gdl<->cdl fallback of the original
-// is expressed here as an ordered chain evaluated per URL, so no engine can
-// recurse into another.
-
-// Engine identifies an external downloader.
 type Engine string
 
 const (
@@ -38,7 +31,6 @@ const (
 	EngineCyberdrop Engine = "cyberdrop-dl"
 )
 
-// Runner executes external download tools and the direct fallback.
 type Runner struct {
 	cfg  *config.Config
 	keys *upload.Keys
@@ -46,20 +38,13 @@ type Runner struct {
 
 func NewRunner(cfg *config.Config, keys *upload.Keys) *Runner { return &Runner{cfg: cfg, keys: keys} }
 
-// RunOpts controls a chain run.
 type RunOpts struct {
 	UserID     int64
 	ExtraArgs  []string
 	OnProgress CountFunc
 	Procs      ProcRegistry
-	// Chain is the ordered list of engines to try for each URL before the
-	// direct-download fallback.
-	Chain []Engine
-	// ConfigPath overrides config discovery for the first engine.
-	ConfigPath string
+	Chain      []Engine
 }
-
-// ---- path discovery ------------------------------------------------------
 
 func isFile(p string) bool { st, err := os.Stat(p); return err == nil && st.Mode().IsRegular() }
 
@@ -67,40 +52,6 @@ func (r *Runner) userDir(uid int64) string {
 	return filepath.Join(r.cfg.AuthDir, strconv.FormatInt(uid, 10))
 }
 
-// GDLConfigPath resolves the gallery-dl config: user -> configs/ -> global.
-func (r *Runner) GDLConfigPath(uid int64) string {
-	cands := []string{}
-	if uid > 0 {
-		cands = append(cands, filepath.Join(r.userDir(uid), "gallery-dl.conf"))
-	}
-	cands = append(cands, r.cfg.GDLConfigPath, filepath.Join(r.cfg.AuthDir, "gallery-dl.conf"))
-	for _, c := range cands {
-		if isFile(c) {
-			abs, _ := filepath.Abs(c)
-			return abs
-		}
-	}
-	return ""
-}
-
-// CDLConfigPath resolves the cyberdrop-dl config.
-func (r *Runner) CDLConfigPath(uid int64) string {
-	cands := []string{}
-	if uid > 0 {
-		cands = append(cands, filepath.Join(r.userDir(uid), "config.yaml"), filepath.Join(r.userDir(uid), "cyberdrop-dl.yaml"))
-	}
-	cands = append(cands, r.cfg.CDLConfigPath,
-		filepath.Join(r.cfg.AuthDir, "cyberdrop-dl.yaml"), filepath.Join(r.cfg.AuthDir, "config.yaml"))
-	for _, c := range cands {
-		if isFile(c) {
-			abs, _ := filepath.Abs(c)
-			return abs
-		}
-	}
-	return ""
-}
-
-// CookiesPath resolves cookies.txt: user -> auth/ -> cwd.
 func (r *Runner) CookiesPath(uid int64) string {
 	cands := []string{}
 	if uid > 0 {
@@ -116,8 +67,6 @@ func (r *Runner) CookiesPath(uid int64) string {
 	return ""
 }
 
-// ---- URL parsing ---------------------------------------------------------
-
 var cdlPrefixes = []string{"cdl:", "cyberdrop-dl:"}
 
 func trimCDL(s string) string {
@@ -130,8 +79,6 @@ func trimCDL(s string) string {
 	return s
 }
 
-// ParseURLs splits a job URL (JSON array, whitespace list, or single value)
-// into naturally sorted URLs.
 func ParseURLs(raw string) []string {
 	raw = trimCDL(raw)
 	var urls []string
@@ -159,17 +106,70 @@ func ParseURLs(raw string) []string {
 	return urls
 }
 
-// ---- command builders ----------------------------------------------------
+func PointsToFile(val string) bool {
+	val = strings.TrimSpace(val)
+	if idx := strings.Index(val, "="); idx >= 0 {
+		val = val[idx+1:]
+	}
+	val = strings.Trim(val, `"'`)
+	if val == "" {
+		return false
+	}
+	if strings.Contains(val, "/") || strings.Contains(val, `\`) {
+		return true
+	}
+	low := strings.ToLower(val)
+	for _, ext := range []string{".conf", ".json", ".yaml", ".yml", ".txt", ".ini", ".toml"} {
+		if strings.HasSuffix(low, ext) {
+			return true
+		}
+	}
+	st, err := os.Stat(val)
+	return err == nil && !st.IsDir()
+}
+
+func SanitizeExtraArgs(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		low := strings.ToLower(a)
+		if low == "-c" || low == "--config" || low == "--config-file" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(low, "-c=") || strings.HasPrefix(low, "--config=") || strings.HasPrefix(low, "--config-file=") {
+			continue
+		}
+		if low == "-o" || low == "--option" {
+			if i+1 < len(args) {
+				next := args[i+1]
+				if PointsToFile(next) {
+					i++
+					continue
+				}
+				out = append(out, a, next)
+				i++
+				continue
+			}
+			continue
+		}
+		if strings.HasPrefix(low, "-o=") || strings.HasPrefix(low, "--option=") {
+			val := a[strings.Index(a, "=")+1:]
+			if PointsToFile(val) {
+				continue
+			}
+			out = append(out, a)
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
 
 func (r *Runner) gdlCmd(url, dest string, o RunOpts) *exec.Cmd {
 	args := []string{}
-	conf := o.ConfigPath
-	if conf == "" {
-		conf = r.GDLConfigPath(o.UserID)
-	}
-	if conf != "" {
-		args = append(args, "--config", conf)
-	}
 	if ck := r.CookiesPath(o.UserID); ck != "" {
 		args = append(args, "--cookies", ck)
 	}
@@ -178,7 +178,12 @@ func (r *Runner) gdlCmd(url, dest string, o RunOpts) *exec.Cmd {
 		"--sleep", fmt.Sprintf("%g-%g", r.cfg.GDLSleepMin, r.cfg.GDLSleepMax),
 		"--sleep-request", r.cfg.GDLSleepRequest,
 		"--retries", strconv.Itoa(r.cfg.GDLRetries),
-		"-v")
+		"-v",
+		"-o", "extractor.path-restrict=auto",
+		"-o", "extractor.user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.82 Safari/537.36",
+		"-o", "output.skip=true",
+		"-o", "downloader.part=true",
+	)
 	if pacing.ParseSpeedLimit(r.cfg.GlobalSpeedLimit) > 0 {
 		args = append(args, "--limit-rate", r.cfg.GlobalSpeedLimit)
 	}
@@ -194,7 +199,7 @@ func (r *Runner) gdlCmd(url, dest string, o RunOpts) *exec.Cmd {
 	} else if tok := strings.TrimSpace(r.cfg.GofileAPIKey); tok != "" && r.cfg.AllowSharedKeys {
 		args = append(args, "-o", "extractor.gofile.api-token="+tok)
 	}
-	args = append(args, o.ExtraArgs...)
+	args = append(args, SanitizeExtraArgs(o.ExtraArgs)...)
 	args = append(args, url)
 	return exec.Command("gallery-dl", args...)
 }
@@ -216,31 +221,24 @@ func (r *Runner) cdlCmd(url, dest string, o RunOpts) (*exec.Cmd, error) {
 	absDest, _ := filepath.Abs(dest)
 	absDB, _ := filepath.Abs(r.cfg.CDLArchivePath())
 	args := []string{"download", "--ui", "disabled", "--no-stats", "--min-free-space", "0", "--ignore-history",
-		"--no-mtime", "--download-folder", absDest, "--attempts", strconv.Itoa(r.cfg.CDLRetries), "--database-file", absDB}
-	conf := o.ConfigPath
-	if conf == "" {
-		conf = r.CDLConfigPath(o.UserID)
-	}
-	if conf != "" {
-		args = append(args, "--config-file", conf)
-	}
+		"--no-mtime", "--download-folder", absDest, "--attempts", strconv.Itoa(r.cfg.CDLRetries), "--database-file", absDB,
+		"--rate-limit", "25",
+		"--user-agent", "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"}
 	if ck := r.CookiesPath(o.UserID); ck != "" {
 		args = append(args, "--cookies", ck)
 	}
 	if n := pacing.ParseSpeedLimit(r.cfg.GlobalSpeedLimit); n > 0 {
 		args = append(args, "--speed-limit", strconv.FormatInt(n, 10))
 	}
-	args = append(args, o.ExtraArgs...)
+	args = append(args, SanitizeExtraArgs(o.ExtraArgs)...)
 	args = append(args, url)
 	return exec.Command(bin, args...), nil
 }
 
-// ---- process execution ---------------------------------------------------
-
 type procOut struct {
 	code   int
-	stdout []string // last 300 lines
-	stderr []string // last 200 lines
+	stdout []string
+	stderr []string
 	count  int
 }
 
@@ -258,8 +256,6 @@ func tail(lines []string, n int) []string {
 	return lines
 }
 
-// runProc starts cmd, streams stdout through onLine, collects stderr, and kills
-// the process when ctx is cancelled.
 func runProc(ctx context.Context, cmd *exec.Cmd, procs ProcRegistry, onLine func(string) bool) (*procOut, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -351,7 +347,6 @@ func countNew(before, after map[string]struct{}) int {
 	return n
 }
 
-// runGDL runs gallery-dl once for a URL, returning success, stderr tail, and after fileSet.
 func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base int, before map[string]struct{}) (bool, string, map[string]struct{}, error) {
 	if _, err := exec.LookPath("gallery-dl"); err != nil {
 		return false, "", nil, fmt.Errorf("%w: gallery-dl (install with: pip install gallery-dl)", ErrToolMissing)
@@ -367,7 +362,7 @@ func (r *Runner) runGDL(ctx context.Context, url, dest string, o RunOpts, base i
 			}
 		}
 		if o.OnProgress != nil {
-			o.OnProgress(base+1, name, url) // approximate; refined after run
+			o.OnProgress(base+1, name, url)
 		}
 		return true
 	})
@@ -436,9 +431,6 @@ func lastChars(s string, n int) string {
 	return s
 }
 
-// Run executes the engine chain per URL, then the direct fallback, and reports
-// the union of files present in dest. Like the original, the run is "ok" when
-// any file exists at the end.
 func (r *Runner) Run(ctx context.Context, rawURL, dest string, o RunOpts) (Result, error) {
 	if len(o.Chain) == 0 {
 		o.Chain = []Engine{EngineGalleryDL, EngineCyberdrop}
@@ -461,9 +453,6 @@ func (r *Runner) Run(ctx context.Context, rawURL, dest string, o RunOpts) (Resul
 			var err error
 			var afterSet map[string]struct{}
 			opts := o
-			if i > 0 {
-				opts.ConfigPath = "" // config override only applies to the primary engine
-			}
 			beforeSet := fileSet(dest)
 			switch eng {
 			case EngineGalleryDL:
@@ -522,8 +511,6 @@ func (r *Runner) Run(ctx context.Context, rawURL, dest string, o RunOpts) (Resul
 	return res, nil
 }
 
-// RunWithBackoff wraps Run with adaptive retries when rate limiting is
-// detected in tool output.
 func (r *Runner) RunWithBackoff(ctx context.Context, rawURL, dest string, o RunOpts) (Result, error) {
 	bo := pacing.NewBackoff(r.cfg.GDLBackoffBase, r.cfg.GDLBackoffMultiple, r.cfg.GDLMaxRunRetries)
 	for {

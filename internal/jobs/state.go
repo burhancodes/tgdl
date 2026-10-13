@@ -1,4 +1,3 @@
-// Package jobs implements the download/upload pipeline and its queue manager.
 package jobs
 
 import (
@@ -16,17 +15,13 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 )
 
-// Skip records a file that was not uploaded and why.
 type Skip struct{ Name, Reason string }
 
-// MirrorRecord holds the web-host links produced for one file.
 type MirrorRecord struct {
 	File  string
-	Links map[string]string // host -> url
+	Links map[string]string
 }
 
-// State is the live, concurrency-safe view of one job. Sources and the
-// pipeline mutate it through methods; the status renderer takes Snapshots.
 type State struct {
 	mu sync.Mutex
 
@@ -38,15 +33,13 @@ type State struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	proc   *exec.Cmd
-	killer func() // e.g. aria2 GID force-remove
+	killer func()
 
-	// Status message.
 	msg        tg.MessageRef
 	lastText   string
 	lastEditAt time.Time
 	pinned     bool
 
-	// Download metrics.
 	engine       string
 	determinate  bool
 	pct          float64
@@ -62,17 +55,13 @@ type State struct {
 	seeders      int
 	peers        int
 	isTorrent    bool
-	isPatch      bool
-	patchStage   string
 	deletedBytes int64
 
-	// Post-processing flags.
 	converting  bool
 	convertFile string
 	archiving   bool
 	archiveFmt  string
 
-	// Upload metrics.
 	currentUpload string
 	uploadPct     float64
 	uploadSpeed   float64
@@ -136,7 +125,6 @@ func newState(job *store.Job, dest, extract string, parent context.Context) *Sta
 	}
 }
 
-// Job returns the current persisted job (never nil).
 func (s *State) Job() *store.Job { s.mu.Lock(); defer s.mu.Unlock(); return s.job }
 
 func (s *State) setJob(j *store.Job) {
@@ -145,13 +133,10 @@ func (s *State) setJob(j *store.Job) {
 	s.mu.Unlock()
 }
 
-// Args returns the parsed job arguments.
 func (s *State) Args() dl.Args { s.mu.Lock(); defer s.mu.Unlock(); return s.args }
 
-// Context is cancelled when the job is cancelled or the manager stops.
 func (s *State) Context() context.Context { return s.ctx }
 
-// Poke asks the status updater to refresh soon.
 func (s *State) Poke() {
 	select {
 	case s.trigger <- struct{}{}:
@@ -174,15 +159,10 @@ func isClosed(c chan struct{}) bool {
 	}
 }
 
-// ---- dl.ProcRegistry ------------------------------------------------------
-
-// Register records the running subprocess so Cancel can kill it.
 func (s *State) Register(cmd *exec.Cmd) { s.mu.Lock(); s.proc = cmd; s.mu.Unlock() }
 
-// Unregister clears the recorded subprocess.
 func (s *State) Unregister() { s.mu.Lock(); s.proc = nil; s.mu.Unlock() }
 
-// SetKiller installs a custom cancellation hook (used by aria2).
 func (s *State) SetKiller(f func()) { s.mu.Lock(); s.killer = f; s.mu.Unlock() }
 
 func (s *State) kill() {
@@ -197,19 +177,9 @@ func (s *State) kill() {
 	}
 }
 
-// ---- download metric setters ---------------------------------------------
-
 func (s *State) SetEngine(name string) { s.mu.Lock(); s.engine = name; s.mu.Unlock() }
 func (s *State) SetTorrent(v bool)     { s.mu.Lock(); s.isTorrent = v; s.mu.Unlock() }
-func (s *State) SetPatch(v bool)       { s.mu.Lock(); s.isPatch = v; s.mu.Unlock() }
-func (s *State) SetPatchStage(v string) {
-	s.mu.Lock()
-	s.patchStage = v
-	s.mu.Unlock()
-	s.Poke()
-}
 
-// Bytes is the ProgressFunc for byte-oriented downloaders.
 func (s *State) Bytes(p dl.Progress) {
 	s.mu.Lock()
 	s.downloaded = p.Current
@@ -227,8 +197,6 @@ func (s *State) Bytes(p dl.Progress) {
 	s.Poke()
 }
 
-// SpeedBytes reports cumulative bytes and an externally measured speed
-// (Google Drive, MEGA).
 func (s *State) SpeedBytes(downloaded int64, speed float64, file string) {
 	s.mu.Lock()
 	s.downloaded, s.speed = downloaded, speed
@@ -240,7 +208,6 @@ func (s *State) SpeedBytes(downloaded int64, speed float64, file string) {
 	s.Poke()
 }
 
-// Count reports completed-file counts from subprocess engines.
 func (s *State) Count(n int, file, _ string) {
 	s.mu.Lock()
 	s.fileCount = n
@@ -251,7 +218,6 @@ func (s *State) Count(n int, file, _ string) {
 	s.Poke()
 }
 
-// Aria reports aria2 progress.
 func (s *State) Aria(pct float64, completed, speed int64, seeders, conns int, name string) {
 	s.mu.Lock()
 	s.determinate, s.pct, s.downloaded, s.speed = true, pct, completed, float64(speed)
@@ -289,7 +255,6 @@ func (s *State) smoothSpeedLocked(cur int64) {
 	s.lastSpeedAt, s.lastSpeedB = now, cur
 }
 
-// observeDisk feeds the disk-scan monitor's measurement into the metrics.
 func (s *State) observeDisk(size int64, currentFile string) {
 	s.mu.Lock()
 	s.downloaded = size
@@ -304,8 +269,6 @@ func (s *State) observeDisk(size int64, currentFile string) {
 
 func (s *State) addDeleted(n int64) { s.mu.Lock(); s.deletedBytes += n; s.mu.Unlock() }
 func (s *State) deleted() int64     { s.mu.Lock(); defer s.mu.Unlock(); return s.deletedBytes }
-
-// ---- upload bookkeeping ---------------------------------------------------
 
 func (s *State) markUploaded(rel string) { s.mu.Lock(); s.uploaded[rel] = struct{}{}; s.mu.Unlock() }
 func (s *State) isUploaded(rel string) bool {
@@ -371,7 +334,6 @@ func (s *State) isSplitPart(keys ...string) bool {
 	return false
 }
 
-// UploadProgress is the tg.ProgressFunc for the current upload.
 func (s *State) UploadProgress(cur, total int64) {
 	s.mu.Lock()
 	if total > 0 {
@@ -423,7 +385,6 @@ func (s *State) addMirror(r MirrorRecord) {
 	s.mu.Unlock()
 }
 
-// Snapshot copies the state into a renderable status.Snapshot.
 func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,18 +394,11 @@ func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {
 		Engine: s.engine, DownloadDone: s.downloadFinished(), Determinate: s.determinate, Pct: s.pct,
 		Downloaded: s.downloaded + s.deletedBytes, Expected: s.expected, Speed: s.speed,
 		CurrentFile: s.currentFile, FileCount: s.fileCount, TorrentName: s.torrentName,
-		Seeders: s.seeders, Peers: s.peers, IsTorrent: s.isTorrent, IsPatch: s.isPatch, PatchStage: s.patchStage,
+		Seeders: s.seeders, Peers: s.peers, IsTorrent: s.isTorrent,
 		Converting: s.converting, ConvertFile: s.convertFile, Archiving: s.archiving, ArchiveFmt: s.archiveFmt,
 		TotalFiles: job.TotalFiles, Sent: s.sent, Skipped: len(s.skipped),
 		UploadFile: s.currentUpload, UploadPct: s.uploadPct, UploadSpeed: s.uploadSpeed, UploadActive: s.currentUpload != "",
 		Args: s.args.Display(),
-	}
-	if s.isPatch {
-		snap.PatchInput = s.args.OriginalFilename
-		if snap.PatchInput == "" {
-			snap.PatchInput = "app.apk"
-		}
-		snap.PatchOutput = patchedName(snap.PatchInput)
 	}
 	if len(s.hosts) > 0 {
 		snap.Hosts = s.hosts
@@ -458,14 +412,6 @@ func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {
 	return snap
 }
 
-func patchedName(orig string) string {
-	if len(orig) > 4 && (orig[len(orig)-4:] == ".apk" || orig[len(orig)-4:] == ".APK") {
-		return orig[:len(orig)-4] + "_patched.apk"
-	}
-	return orig + "_patched.apk"
-}
-
-// sortedSkips returns skips in insertion order (copy).
 func (s *State) skips() []Skip {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -490,7 +436,6 @@ func (s *State) pdLinkList() []archiveLink {
 func (s *State) setResult(r dl.Result) { s.mu.Lock(); s.downloadResult = r; s.mu.Unlock() }
 func (s *State) result() dl.Result     { s.mu.Lock(); defer s.mu.Unlock(); return s.downloadResult }
 
-// setFatal aborts the whole job with a user-visible error.
 func (s *State) setFatal(msg string) {
 	s.mu.Lock()
 	if s.fatal == "" {

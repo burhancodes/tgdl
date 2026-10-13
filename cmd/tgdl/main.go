@@ -1,5 +1,3 @@
-// Command tgdl is a Telegram bot that downloads from many sources and uploads
-// to Telegram and file hosts.
 package main
 
 import (
@@ -21,7 +19,6 @@ import (
 
 	tgbot "github.com/go-telegram/bot"
 
-	"github.com/burhanverse/tgdl/internal/apk"
 	"github.com/burhanverse/tgdl/internal/auth"
 	"github.com/burhanverse/tgdl/internal/bot"
 	"github.com/burhanverse/tgdl/internal/config"
@@ -97,7 +94,7 @@ func run() error {
 
 	deps := &jobs.Deps{
 		Cfg: cfg, Store: st, TG: tg.Client(api), Keys: keys, Hosts: hosts, Runner: runner,
-		Aria: aria, Xenforo: dl.NewXenforo(cfg, search), Patcher: apk.New(cfg),
+		Aria: aria,
 	}
 	mgr := jobs.NewManager(deps, lim)
 	app = bot.New(bot.Deps{Cfg: cfg, Auth: authz, Store: st, Mgr: mgr, Keys: keys, Hosts: hosts,
@@ -107,7 +104,6 @@ func run() error {
 		slog.Warn("could not set bot commands", "err", err)
 	}
 
-	// Sidecars start in the background so the bot is responsive immediately.
 	go search.Start(ctx)
 	go func() {
 		if err := aria.Start(ctx); err != nil {
@@ -119,7 +115,7 @@ func run() error {
 		return fmt.Errorf("start job manager: %w", err)
 	}
 	slog.Info("bot is active and listening for messages")
-	b.Start(ctx) // blocks until ctx is cancelled
+	b.Start(ctx)
 
 	slog.Info("shutting down")
 	mgr.Stop()
@@ -142,15 +138,12 @@ func commands() []tg.Command {
 		{Name: "ts", Description: "Search torrents across indexers"},
 		{Name: "gdl", Description: "Download URLs using gallery-dl"},
 		{Name: "cdl", Description: "Download URLs using cyberdrop-dl"},
-		{Name: "xenforo", Description: "Download media from a forum thread"},
 		{Name: "mega", Description: "Download file or folder from MEGA"},
-		{Name: "gdlconf", Description: "Manage your gallery-dl config and cookies"},
+		{Name: "cookies", Description: "Manage your cookies for gallery-dl and cyberdrop-dl"},
 		{Name: "gd2tg", Description: "Download Google Drive link to Telegram"},
 		{Name: "gofile", Description: "Download GoFile links or upload replied media"},
 		{Name: "fileditch", Description: "Upload replied media to FileDitch"},
 		{Name: "pdup", Description: "Upload replied media to Pixeldrain"},
-		{Name: "patch", Description: "Decompile, patch, sign & upload an APK"},
-		{Name: "setkeystore", Description: "Set your JKS keystore for signing"},
 		{Name: "unzip", Description: "Download & extract an archive"},
 		{Name: "status", Description: "Show active tasks"},
 		{Name: "cancel", Description: "Cancel active or queued jobs"},

@@ -59,7 +59,6 @@ function extractSaltFromJS(jsCode) {
     console.warn(`VM extraction error: ${err.message}`);
   }
 
-  // Regex fallback
   const colonMatches = jsCode.match(/::([a-f0-9]{12,32})/gi);
   if (colonMatches) {
     for (const m of colonMatches) {
@@ -97,8 +96,8 @@ async function main() {
 
   const confPath = path.resolve(__dirname, '../configs/gallery-dl.conf');
   if (!fs.existsSync(confPath)) {
-    console.error(`Config file not found at ${confPath}`);
-    process.exit(1);
+    console.log(`Config file not found at ${confPath}; skipping.`);
+    return;
   }
 
   const content = fs.readFileSync(confPath, 'utf8');

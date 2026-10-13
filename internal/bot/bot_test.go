@@ -11,36 +11,49 @@ import (
 
 func TestParseFlags(t *testing.T) {
 	cases := []struct {
-		tokens   []string
-		wantURL  []string
-		wantPass string
-		wantM    bool
-		wantTG   bool
-		wantUZ   bool
+		tokens    []string
+		wantURL   []string
+		wantPass  string
+		wantM     bool
+		wantTG    bool
+		wantUZ    bool
+		wantExtra []string
 	}{
 		{
-			tokens:   []string{"-m", "-tg", "-uz", "-p", "secret", "https://gofile.io/d/123"},
-			wantURL:  []string{"https://gofile.io/d/123"},
-			wantPass: "secret",
-			wantM:    true,
-			wantTG:   true,
-			wantUZ:   true,
+			tokens:    []string{"-m", "-tg", "-uz", "-p", "secret", "https://gofile.io/d/123"},
+			wantURL:   []string{"https://gofile.io/d/123"},
+			wantPass:  "secret",
+			wantM:     true,
+			wantTG:    true,
+			wantUZ:    true,
+			wantExtra: nil,
 		},
 		{
-			tokens:   []string{"--password=foo", "-mirror", "gofile:https://gofile.io/d/456"},
-			wantURL:  []string{"gofile:https://gofile.io/d/456"},
-			wantPass: "foo",
-			wantM:    true,
-			wantTG:   false,
-			wantUZ:   false,
+			tokens:    []string{"--password=foo", "-mirror", "gofile:https://gofile.io/d/456"},
+			wantURL:   []string{"gofile:https://gofile.io/d/456"},
+			wantPass:  "foo",
+			wantM:     true,
+			wantTG:    false,
+			wantUZ:    false,
+			wantExtra: nil,
 		},
 		{
-			tokens:   []string{"gfdl:https://gofile.io/d/789", "gf:https://gofile.io/d/abc"},
-			wantURL:  []string{"gfdl:https://gofile.io/d/789", "gf:https://gofile.io/d/abc"},
-			wantPass: "",
-			wantM:    false,
-			wantTG:   false,
-			wantUZ:   false,
+			tokens:    []string{"gfdl:https://gofile.io/d/789", "gf:https://gofile.io/d/abc"},
+			wantURL:   []string{"gfdl:https://gofile.io/d/789", "gf:https://gofile.io/d/abc"},
+			wantPass:  "",
+			wantM:     false,
+			wantTG:    false,
+			wantUZ:    false,
+			wantExtra: nil,
+		},
+		{
+			tokens:    []string{"--config", "/etc/passwd", "-c", "my.conf", "--config-file=/bad", "-o", "foo=bar", "-o", "/etc/hosts", "--rate-limit=5M", "https://example.com"},
+			wantURL:   []string{"https://example.com"},
+			wantPass:  "",
+			wantM:     false,
+			wantTG:    false,
+			wantUZ:    false,
+			wantExtra: []string{"-o", "foo=bar", "--rate-limit=5M"},
 		},
 	}
 
@@ -60,6 +73,9 @@ func TestParseFlags(t *testing.T) {
 		}
 		if got.Unzip != c.wantUZ {
 			t.Errorf("Unzip: got %v, want %v", got.Unzip, c.wantUZ)
+		}
+		if !reflect.DeepEqual(got.Extra, c.wantExtra) {
+			t.Errorf("Extra for tokens %v: got %v, want %v", c.tokens, got.Extra, c.wantExtra)
 		}
 	}
 }
@@ -126,7 +142,6 @@ func TestDefault_PinnedServiceMessageDeletion(t *testing.T) {
 		botID: 12345,
 	}
 
-	// 1. Service message for pinned message by the bot itself
 	updateBotPin := &models.Update{
 		Message: &models.Message{
 			ID:   100,
@@ -142,7 +157,6 @@ func TestDefault_PinnedServiceMessageDeletion(t *testing.T) {
 		t.Fatalf("expected bot's pinned service message to be deleted, got: %+v", tgMock.deleted)
 	}
 
-	// 2. Service message for pinned message by another user
 	tgMock.deleted = nil
 	updateUserPin := &models.Update{
 		Message: &models.Message{

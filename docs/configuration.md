@@ -1,26 +1,23 @@
-# Custom Configuration, Cookies & Task Controls
+# Cookies & Task Controls
 
-This guide explains per-user `gallery-dl.conf` and `cookies.txt` management, live task monitoring, job cancellation, and runtime configuration limits.
+This guide explains per-user `cookies.txt` management, live task monitoring, job cancellation, and runtime configuration limits.
 
 ---
 
-## Gallery-dl Config & Cookies Manager (`/gdlconf`)
+## Cookies Manager (`/cookies`)
 
-Configure custom authentication, headers, or settings for `gallery-dl`.
+Configure custom authentication cookies for `gallery-dl` and `cyberdrop-dl`.
 
 ### Syntax
 ```text
-/gdlconf
-/gdl_config
+/cookies
 ```
 
 ### Uploading Cookies
 1. Export cookies from your browser (e.g. using *Get cookies.txt* extension).
 2. Upload `cookies.txt` to the Telegram bot chat.
-3. Reply to the `cookies.txt` file with `/gdlconf`.
-
-### Security & Postprocessor Sanitization
-All uploaded `gallery-dl.conf` files are automatically scanned and validated. Any dangerous postprocessors (e.g. `exec`, `python`, `cmd`, `shell`) are denied by default to ensure host security. User cookie and config files exceeding 2 MiB are rejected.
+3. Reply to the `cookies.txt` file with `/cookies`.
+User cookie files exceeding 2 MiB are rejected.
 
 ---
 
@@ -74,7 +71,7 @@ Configure access control and security policies in `.env`:
 
 ## Heavy Task Gate & Archive Tool Settings (`.env`)
 
-- `TG_MAX_CONCURRENT_HEAVY`: Global concurrency limit for heavy operations (archive extraction, folder archiving, MKV/MP3 conversion, large file splitting, APK patching) (default `1`).
+- `TG_MAX_CONCURRENT_HEAVY`: Global concurrency limit for heavy operations (archive extraction, folder archiving, MKV/MP3 conversion, large file splitting) (default `1`).
 - `EXTRACT_THREADS`: Threads allocated to 7z for archive extraction (default `2`).
 - `ARCHIVE_THREADS`: Threads allocated to 7z for folder archiving (default `2`).
 - `ARCHIVE_ZIP_LEVEL`: Compression level for zip archives (default `1`).
