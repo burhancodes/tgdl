@@ -2,7 +2,6 @@ services:
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
     restart: unless-stopped
-    user: "${UID:-1000}:${GID:-1000}"
     mem_limit: ${BOTAPI_MEM:-3g}
     memswap_limit: ${BOTAPI_MEM:-3g}
     cpus: ${BOTAPI_CPUS:-2}

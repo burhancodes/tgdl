@@ -76,14 +76,34 @@ func run() error {
 	authz := auth.New(cfg)
 	authz.WarnIfUnrestricted()
 
-	var app *bot.App
-	b, api, err := bot.NewClient(cfg, authz, func(ctx context.Context, b *tgbot.Bot, u *models.Update) {
-		if app != nil {
-			app.Default(ctx, b, u)
+	var (
+		app *bot.App
+		b   *tgbot.Bot
+		api *tg.BotAPI
+	)
+	for attempt := 1; attempt <= 10; attempt++ {
+		b, api, err = bot.NewClient(cfg, authz, func(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+			if app != nil {
+				app.Default(ctx, b, u)
+			}
+		})
+		if err == nil {
+			break
 		}
-	})
-	if err != nil {
-		return fmt.Errorf("create telegram client: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt == 10 {
+			return fmt.Errorf("create telegram client: %w", err)
+		}
+		slog.Warn("telegram client initialization failed, retrying...", "attempt", attempt, "err", err)
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	keys := upload.NewKeys(cfg)
