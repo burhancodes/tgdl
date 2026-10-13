@@ -155,6 +155,23 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 					_ = os.RemoveAll(dest)
 					return
 				}
+				if lim.MaxExtractFiles > 0 {
+					var fileCount int
+					_ = filepath.WalkDir(dest, func(_ string, d os.DirEntry, err error) error {
+						if err == nil && !d.IsDir() {
+							fileCount++
+						}
+						return nil
+					})
+					if fileCount > lim.MaxExtractFiles {
+						guardMu.Lock()
+						guardErr = fmt.Errorf("extraction exceeded maximum file count limit (%d files)", lim.MaxExtractFiles)
+						guardMu.Unlock()
+						cancelExtract()
+						_ = os.RemoveAll(dest)
+						return
+					}
+				}
 				if free, err := fsutil.FreeDiskSpace(dest); err == nil {
 					if int64(free) < lim.MinFreeDiskBytes {
 						guardMu.Lock()
@@ -213,7 +230,7 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 			return gerr
 		}
 		if err == nil && code == 0 {
-			return nil
+			return checkFileCountLimit(dest, lim.MaxExtractFiles)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -231,7 +248,7 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 				return gerr
 			}
 			if err == nil && code == 0 {
-				return nil
+				return checkFileCountLimit(dest, lim.MaxExtractFiles)
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -253,7 +270,7 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 				return gerr
 			}
 			if err == nil && code == 0 {
-				return nil
+				return checkFileCountLimit(dest, lim.MaxExtractFiles)
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -264,7 +281,7 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 		}
 		if password == "" {
 			if err := extractZip(archivePath, dest); err == nil {
-				return nil
+				return checkFileCountLimit(dest, lim.MaxExtractFiles)
 			} else if errors.Is(err, ErrPasswordRequired) {
 				sawPassword = true
 			} else {
@@ -276,7 +293,7 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 		switch {
 		case ext == ".tar" || strings.HasSuffix(base, ".tar.gz") || ext == ".tgz" || strings.HasSuffix(base, ".tar.bz2") || ext == ".tbz2":
 			if err := extractTar(archivePath, dest); err == nil {
-				return nil
+				return checkFileCountLimit(dest, lim.MaxExtractFiles)
 			} else {
 				slog.Warn("native tar extraction failed", "err", err)
 			}
@@ -289,6 +306,24 @@ func Extract(ctx context.Context, archivePath, dest, password string, limits ...
 		return fmt.Errorf("%w: %s", ErrPasswordRequired, filepath.Base(archivePath))
 	}
 	return fmt.Errorf("could not extract %s (is 7z installed?)", filepath.Base(archivePath))
+}
+
+func checkFileCountLimit(dest string, maxFiles int) error {
+	if maxFiles <= 0 {
+		return nil
+	}
+	var count int
+	_ = filepath.WalkDir(dest, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	if count > maxFiles {
+		_ = os.RemoveAll(dest)
+		return fmt.Errorf("extraction exceeded maximum file count limit (%d files)", maxFiles)
+	}
+	return nil
 }
 
 func tailStr(s string, n int) string {

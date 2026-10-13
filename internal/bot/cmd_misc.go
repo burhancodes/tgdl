@@ -188,6 +188,10 @@ func (a *App) hostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, h
 		return
 	}
 	defer os.RemoveAll(dir)
+	if a.mgr != nil {
+		release := a.mgr.RegisterTempDir(dir)
+		defer release()
+	}
 
 	var last time.Time
 	edit := func(text string) {
@@ -259,6 +263,10 @@ func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			return
 		}
 		defer os.RemoveAll(tmp)
+		if a.mgr != nil {
+			release := a.mgr.RegisterTempDir(tmp)
+			defer release()
+		}
 		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmp, nil)
 		if err != nil {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))

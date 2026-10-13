@@ -106,10 +106,10 @@ type Config struct {
 	MemoryLimitMB int64
 
 	// Torrents.
-	TorrentTimeout       time.Duration
-	SearchLimit          int
-	MagnetioURL          string
-	MagnetioSecret       string
+	TorrentTimeout      time.Duration
+	SearchLimit         int
+	MagnetioURL         string
+	MagnetioSecret      string
 	AriaMaxConcurrentDL int
 
 	// Access control.
@@ -133,10 +133,10 @@ func Load() (*Config, error) {
 	_ = godotenv.Load() // an absent .env is fine
 
 	c := &Config{
-		APIID:     envInt("TG_API_ID", 0),
-		APIHash:   envStr("TG_API_HASH", ""),
-		BotToken:  envStr("TG_BOT_TOKEN", ""),
-		BotAPIURL: envStr("TG_BOT_API_URL", ""),
+		APIID:             envInt("TG_API_ID", 0),
+		APIHash:           envStr("TG_API_HASH", ""),
+		BotToken:          envStr("TG_BOT_TOKEN", ""),
+		BotAPIURL:         envStr("TG_BOT_API_URL", ""),
 		BotAPILocalDirMap: envStr("TG_BOT_API_LOCAL_DIR_MAP", ""),
 
 		PixeldrainAPIKey: envStr("PIXELDRAIN_API_KEY", ""),
@@ -183,10 +183,10 @@ func Load() (*Config, error) {
 		GlobalSpeedLimit: envStr("GLOBAL_DOWNLOAD_SPEED_LIMIT", "20M"),
 		HLSTimeout:       envSeconds("HLS_DOWNLOAD_TIMEOUT", 300),
 
-		TGUploadDelayMin:   envSeconds("TG_UPLOAD_DELAY_MIN", 2.0),
-		TGUploadDelayMax:   envSeconds("TG_UPLOAD_DELAY_MAX", 4.5),
-		TGBatchSize:        envInt("TG_BATCH_SIZE", 30),
-		TGBatchCooldown:    envSeconds("TG_BATCH_COOLDOWN_S", 25),
+		TGUploadDelayMin:   envSeconds("TG_UPLOAD_DELAY_MIN", 3.0),
+		TGUploadDelayMax:   envSeconds("TG_UPLOAD_DELAY_MAX", 5.0),
+		TGBatchSize:        envInt("TG_BATCH_SIZE", 15),
+		TGBatchCooldown:    envSeconds("TG_BATCH_COOLDOWN_S", 20),
 		TGUploadMaxRetries: envInt("TG_UPLOAD_MAX_RETRIES", 3),
 		MaxConcurrentDL:    max(1, envInt("TG_MAX_CONCURRENT_DOWNLOADS", 1)),
 		MaxConcurrentUL:    max(1, envInt("TG_MAX_CONCURRENT_UPLOADS", 1)),
@@ -203,10 +203,10 @@ func Load() (*Config, error) {
 		BotAPIDataDir: envStr("TG_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api"),
 		MemoryLimitMB: envInt64("TGDL_MEMORY_LIMIT_MB", 0),
 
-		TorrentTimeout: envSeconds("TORRENT_TIMEOUT", 120),
-		SearchLimit:    envInt("SEARCH_LIMIT", 300),
-		MagnetioURL:    envStr("MAGNETIO_RPC_URL", "http://magnetio-scraper:8080/rpc"),
-		MagnetioSecret: envStr("MAGNETIO_RPC_SECRET", ""),
+		TorrentTimeout:      envSeconds("TORRENT_TIMEOUT", 120),
+		SearchLimit:         envInt("SEARCH_LIMIT", 300),
+		MagnetioURL:         envStr("MAGNETIO_RPC_URL", "http://magnetio-scraper:8080/rpc"),
+		MagnetioSecret:      envStr("MAGNETIO_RPC_SECRET", ""),
 		AriaMaxConcurrentDL: envInt("ARIA_MAX_CONCURRENT_DOWNLOADS", 1),
 
 		MaxJobsPerChat: envInt("MAX_JOBS_PER_CHAT", 3),

@@ -35,23 +35,36 @@ type Manager struct {
 	ulSem    *semaphore.Weighted
 	heavySem *semaphore.Weighted
 
-	mu     sync.Mutex
-	states map[string]*State
-	wg     sync.WaitGroup
-	root   context.Context
-	stop   context.CancelFunc
+	mu        sync.Mutex
+	states    map[string]*State
+	activeTmp sync.Map
+	wg        sync.WaitGroup
+	root      context.Context
+	stop      context.CancelFunc
 }
 
 // NewManager wires a manager. lim is shared with the Telegram-facing code.
 func NewManager(d *Deps, lim *pacing.TelegramLimiter) *Manager {
 	media.SetTempDir(filepath.Join(d.Cfg.DataDir, "tmp"))
-	hs := semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentHeavy))
+	mcHeavy := int64(1)
+	if d.Cfg.MaxConcurrentHeavy > 0 {
+		mcHeavy = int64(d.Cfg.MaxConcurrentHeavy)
+	}
+	mcDL := int64(1)
+	if d.Cfg.MaxConcurrentDL > 0 {
+		mcDL = int64(d.Cfg.MaxConcurrentDL)
+	}
+	mcUL := int64(1)
+	if d.Cfg.MaxConcurrentUL > 0 {
+		mcUL = int64(d.Cfg.MaxConcurrentUL)
+	}
+	hs := semaphore.NewWeighted(mcHeavy)
 	d.HeavySem = hs
 	return &Manager{
 		d: d, sources: DefaultSources(d), lim: lim,
 		up:       newTGUploader(d.TG, lim, d.Cfg.UploadLimit(), d.Cfg.AlbumMaxTotalBytes),
-		dlSem:    semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentDL)),
-		ulSem:    semaphore.NewWeighted(int64(d.Cfg.MaxConcurrentUL)),
+		dlSem:    semaphore.NewWeighted(mcDL),
+		ulSem:    semaphore.NewWeighted(mcUL),
 		heavySem: hs,
 		states:   map[string]*State{},
 	}
@@ -103,6 +116,16 @@ func (m *Manager) Stop() {
 	}
 }
 
+// RegisterTempDir marks a temporary directory as active so cleanupOrphans will not delete it.
+// It returns a release function that should be deferred until the directory is removed or no longer active.
+func (m *Manager) RegisterTempDir(path string) func() {
+	base := filepath.Base(path)
+	m.activeTmp.Store(base, struct{}{})
+	return func() {
+		m.activeTmp.Delete(base)
+	}
+}
+
 func (m *Manager) cleanupOrphans(keep []*store.Job) {
 	entries, err := os.ReadDir(m.d.Cfg.DownloadsDir())
 	if err != nil {
@@ -115,6 +138,7 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		live[base+"_extract"] = true
 		live[base+"_patch_work"] = true
 		live[base+"_pd_temp"] = true
+		live[j.MirrorTempDirName()] = true
 	}
 	m.mu.Lock()
 	for _, s := range m.states {
@@ -123,6 +147,7 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		live[base+"_extract"] = true
 		live[base+"_patch_work"] = true
 		live[base+"_pd_temp"] = true
+		live[s.Job().MirrorTempDirName()] = true
 	}
 	m.mu.Unlock()
 
@@ -132,6 +157,9 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 			continue
 		}
 		name := e.Name()
+		if _, active := m.activeTmp.Load(name); active {
+			continue
+		}
 		isTarget := strings.HasPrefix(name, "job_") ||
 			strings.HasSuffix(name, "_extract") ||
 			strings.HasSuffix(name, "_patch_work") ||
@@ -144,7 +172,7 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		}
 
 		if strings.HasPrefix(name, "tmp_up_") || strings.HasPrefix(name, "tmp_conf_") {
-			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < 10*time.Minute {
+			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < 6*time.Hour {
 				continue
 			}
 		}
@@ -331,7 +359,12 @@ func (m *Manager) ensureStatusMessage(st *State) {
 		return
 	}
 	target := status.Queued(job.ID, dl.FirstURL(job.URL), st.Args().Display())
+	_ = m.lim.Acquire(st.ctx, job.ChatID)
 	ref, err := m.d.TG.Send(st.ctx, job.ChatID, target, tg.SendOpts{Keyboard: cancelKeyboard(job.ID), Silent: true})
+	m.lim.RecordCallDone(job.ChatID)
+	if secs, ok := tg.IsFlood(err); ok {
+		m.lim.NotifyFloodWait(secs, job.ChatID)
+	}
 	if err != nil {
 		slog.Warn("could not send status message", "job", job.ID, "err", err)
 		return
@@ -376,7 +409,7 @@ func (m *Manager) statusLoop(st *State, stop <-chan struct{}) {
 
 func (m *Manager) render(st *State, force bool) {
 	st.mu.Lock()
-	ref, last := st.msg, st.lastText
+	ref, last, lastEdit := st.msg, st.lastText, st.lastEditAt
 	st.mu.Unlock()
 	if !ref.Valid() {
 		return
@@ -384,6 +417,14 @@ func (m *Manager) render(st *State, force bool) {
 	text := m.Render(st)
 	if text == last && !force {
 		return
+	}
+	if !force {
+		if m.lim.InFlood(ref.ChatID) {
+			return
+		}
+		if time.Since(lastEdit) < 4*time.Second {
+			return
+		}
 	}
 	ctx := st.ctx
 	if ctx.Err() != nil {
@@ -393,6 +434,7 @@ func (m *Manager) render(st *State, force bool) {
 		return
 	}
 	err := m.d.TG.Edit(ctx, ref, text, tg.SendOpts{Keyboard: cancelKeyboard(st.Job().ID)})
+	m.lim.RecordCallDone(ref.ChatID)
 	if secs, ok := tg.IsFlood(err); ok {
 		m.lim.NotifyFloodWait(secs, ref.ChatID)
 		return
@@ -403,6 +445,7 @@ func (m *Manager) render(st *State, force bool) {
 	}
 	st.mu.Lock()
 	st.lastText = text
+	st.lastEditAt = time.Now()
 	st.mu.Unlock()
 }
 
@@ -414,6 +457,10 @@ func (m *Manager) send(st *State, html string, o tg.SendOpts) tg.MessageRef {
 	}
 	_ = m.lim.Acquire(ctx, st.Job().ChatID)
 	ref, err := m.d.TG.Send(ctx, st.Job().ChatID, html, o)
+	m.lim.RecordCallDone(st.Job().ChatID)
+	if secs, ok := tg.IsFlood(err); ok {
+		m.lim.NotifyFloodWait(secs, st.Job().ChatID)
+	}
 	if err != nil {
 		slog.Debug("send failed", "err", err)
 	}
@@ -424,7 +471,13 @@ func (m *Manager) del(ref tg.MessageRef) {
 	if !ref.Valid() {
 		return
 	}
-	if err := m.d.TG.Delete(context.Background(), ref); err != nil {
+	_ = m.lim.Acquire(context.Background(), ref.ChatID)
+	err := m.d.TG.Delete(context.Background(), ref)
+	m.lim.RecordCallDone(ref.ChatID)
+	if secs, ok := tg.IsFlood(err); ok {
+		m.lim.NotifyFloodWait(secs, ref.ChatID)
+	}
+	if err != nil {
 		slog.Debug("delete failed", "err", err)
 	}
 }
@@ -628,7 +681,7 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 		uid := args.UserIDInt()
 		mirror = func(ctx context.Context, p string) (string, error) { return m.d.Hosts.Pixeldrain(ctx, p, uid, nil) }
 	}
-	tempDir := filepath.Join(m.d.Cfg.DownloadsDir(), st.Job().ID+"_pd_temp")
+	tempDir := filepath.Join(m.d.Cfg.DownloadsDir(), st.Job().MirrorTempDirName())
 	opts := archive.FolderOpts{
 		Format:     args.ArchiveFormat,
 		MirrorPD:   mirror,
@@ -678,13 +731,30 @@ func (m *Manager) finalize(st *State) {
 	job := st.Job()
 	ctx := context.Background()
 
-	// Wait for background Pixeldrain mirroring if any
-	st.mirrorWG.Wait()
+	// Wait for background Pixeldrain mirroring if any, with a deadline and honoring cancellation
+	mirrorDone := make(chan struct{})
+	go func() {
+		st.mirrorWG.Wait()
+		close(mirrorDone)
+	}()
+
+	select {
+	case <-mirrorDone:
+	default:
+		m.setStatus(st, "mirroring")
+		select {
+		case <-mirrorDone:
+		case <-time.After(30 * time.Minute):
+			slog.Warn("mirroring wait timed out after 30m", "job", job.ID)
+		case <-st.ctx.Done():
+			slog.Info("mirroring wait cancelled", "job", job.ID)
+		}
+	}
 
 	defer func() {
 		_ = os.RemoveAll(st.Dest)
 		_ = os.RemoveAll(st.Extract)
-		_ = os.RemoveAll(filepath.Join(m.d.Cfg.DownloadsDir(), job.ID+"_pd_temp"))
+		_ = os.RemoveAll(filepath.Join(m.d.Cfg.DownloadsDir(), job.MirrorTempDirName()))
 	}()
 
 	sent, skipped := st.counts()
@@ -733,7 +803,13 @@ func (m *Manager) finalize(st *State) {
 	ref := st.msg
 	st.mu.Unlock()
 	if ref.Valid() {
-		if err := m.d.TG.Edit(ctx, ref, text, tg.SendOpts{}); err != nil {
+		_ = m.lim.Acquire(ctx, ref.ChatID)
+		err := m.d.TG.Edit(ctx, ref, text, tg.SendOpts{})
+		m.lim.RecordCallDone(ref.ChatID)
+		if secs, ok := tg.IsFlood(err); ok {
+			m.lim.NotifyFloodWait(secs, ref.ChatID)
+		}
+		if err != nil {
 			m.send(st, text, tg.SendOpts{})
 		}
 	} else {

@@ -1,6 +1,8 @@
 package fsutil
 
 import (
+	"fmt"
+	"math/rand"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -88,5 +90,46 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 	if got := SanitizeFilename("  ..  "); got != "file" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestNaturalSort_DifferentialAgainstNaturalLess(t *testing.T) {
+	prefixes := []string{"file", "img", "doc", "track", "vol", "ep", "part", "sample"}
+	extensions := []string{".jpg", ".png", ".txt", ".mp4", ".mkv", ".7z", ".001", ""}
+	delims := []string{"_", "-", ".", " ", ""}
+
+	r := rand.New(rand.NewSource(42))
+	const total = 5000
+	names := make([]string, total)
+	for i := 0; i < total; i++ {
+		pref := prefixes[r.Intn(len(prefixes))]
+		delim := delims[r.Intn(len(delims))]
+		num := r.Intn(1000)
+		numFmt := fmt.Sprintf("%d", num)
+		if r.Intn(2) == 0 {
+			numFmt = fmt.Sprintf("%03d", num)
+		} else if r.Intn(3) == 0 {
+			numFmt = fmt.Sprintf("%05d", num)
+		}
+		sub := ""
+		if r.Intn(3) == 0 {
+			sub = fmt.Sprintf("/sub%d/", r.Intn(10))
+		}
+		ext := extensions[r.Intn(len(extensions))]
+		names[i] = sub + pref + delim + numFmt + ext
+	}
+
+	listA := append([]string(nil), names...)
+	listB := append([]string(nil), names...)
+
+	SortNatural(listA)
+	sort.SliceStable(listB, func(i, j int) bool {
+		return NaturalPathLess(listB[i], listB[j])
+	})
+
+	for i := 0; i < total; i++ {
+		if listA[i] != listB[i] {
+			t.Fatalf("mismatch at index %d: SortNatural got %q, NaturalPathLess got %q", i, listA[i], listB[i])
+		}
 	}
 }

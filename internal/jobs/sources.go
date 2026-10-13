@@ -28,14 +28,14 @@ type Patcher interface {
 
 // Deps are the collaborators shared by all sources and the pipeline.
 type Deps struct {
-	Cfg     *config.Config
-	Store   *store.Store
-	TG      tg.Client
-	Keys    *upload.Keys
-	Hosts   *upload.Hosts
-	Runner  *dl.Runner
-	Aria    *torrent.Aria2
-	Xenforo *dl.Xenforo
+	Cfg      *config.Config
+	Store    *store.Store
+	TG       tg.Client
+	Keys     *upload.Keys
+	Hosts    *upload.Hosts
+	Runner   *dl.Runner
+	Aria     *torrent.Aria2
+	Xenforo  *dl.Xenforo
 	Patcher  Patcher
 	HeavySem *semaphore.Weighted
 }
@@ -215,8 +215,8 @@ func (s driveSource) Fetch(ctx context.Context, r *Request) dl.Result {
 
 type megaSource struct{ d *Deps }
 
-func (megaSource) Name() string           { return "mega" }
-func (megaSource) Match(r *Request) bool  { return mega.IsMegaURL(r.URL) }
+func (megaSource) Name() string          { return "mega" }
+func (megaSource) Match(r *Request) bool { return mega.IsMegaURL(r.URL) }
 func (s megaSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	r.St.SetEngine("Mega API")
 	dr := mega.NewDownloader(s.d.Cfg, r.St.SpeedBytes)
@@ -378,8 +378,8 @@ func (s directSource) Fetch(ctx context.Context, r *Request) dl.Result {
 
 type galleryDLSource struct{ d *Deps }
 
-func (galleryDLSource) Name() string          { return "gallery-dl" }
-func (galleryDLSource) Match(*Request) bool   { return true }
+func (galleryDLSource) Name() string        { return "gallery-dl" }
+func (galleryDLSource) Match(*Request) bool { return true }
 func (s galleryDLSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	r.St.SetEngine("gallery-dl")
 	res, err := s.d.Runner.RunWithBackoff(ctx, r.Job.URL, r.Dest, dl.RunOpts{

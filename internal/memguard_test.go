@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-var allowedReadFileFiles = map[string]bool{
-	"keystore.go":      true, // keystore config
-	"keys.go":          true, // upload keys
-	"deviceprofile.go": true, // device profile
-	"xenforo.go":       true, // cookie read
-	"trackers.go":      true, // trackers cache
-	"gdrive.go":        true, // creds / tokens
-	"aria2.go":         true, // torrent-file read
-	"patcher.go":       true, // tool bootstrap check
-	"cmd_misc.go":      true, // gallery-dl cookie/config file (size-bounded)
-	"cmd_download.go":  true, // gallery-dl cookie/config file (size-bounded)
-	"main.go":          true, // cgroup memory limit read
+var allowedReadFileFiles = map[string]string{
+	"cmd/tgdl/main.go":             "cgroup memory limit read",
+	"internal/apk/patcher.go":      "tool bootstrap check",
+	"internal/bot/cmd_download.go": "gallery-dl cookie/config file (size-bounded)",
+	"internal/bot/cmd_misc.go":     "gallery-dl cookie/config file (size-bounded)",
+	"internal/config/keystore.go":  "keystore config read",
+	"internal/dl/deviceprofile.go": "device profile config read",
+	"internal/dl/xenforo.go":       "cookie file read",
+	"internal/torrent/aria2.go":    "torrent-file read",
+	"internal/torrent/trackers.go": "trackers cache read",
+	"internal/gdrive/gdrive.go":    "creds / tokens file read",
+	"internal/upload/keys.go":      "upload keys config read",
 }
 
 func TestMemGuard(t *testing.T) {
@@ -67,7 +67,11 @@ func TestMemGuard(t *testing.T) {
 			return nil
 		}
 
-		base := filepath.Base(path)
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
 
 		ast.Inspect(node, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -79,15 +83,15 @@ func TestMemGuard(t *testing.T) {
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 				if id, ok := sel.X.(*ast.Ident); ok {
 					if (id.Name == "os" || id.Name == "ioutil") && sel.Sel.Name == "ReadFile" {
-						if !allowedReadFileFiles[base] {
+						if _, allowed := allowedReadFileFiles[rel]; !allowed {
 							pos := fset.Position(call.Pos())
-							violations = append(violations, pos.String()+": forbidden "+id.Name+".ReadFile outside allowlist")
+							violations = append(violations, pos.String()+": forbidden "+id.Name+".ReadFile outside allowlist ("+rel+")")
 						}
 					}
 
 					// Check io.ReadAll
 					if id.Name == "io" && sel.Sel.Name == "ReadAll" {
-						if !allowedReadFileFiles[base] {
+						if _, allowed := allowedReadFileFiles[rel]; !allowed {
 							isLimitReader := false
 							if len(call.Args) > 0 {
 								if innerCall, ok := call.Args[0].(*ast.CallExpr); ok {

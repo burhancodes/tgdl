@@ -238,14 +238,14 @@ func (a *Aria2) call(ctx context.Context, port int, method string, params ...any
 }
 
 type status struct {
-	Status          string `json:"status"`
-	ErrorCode       string `json:"errorCode"`
-	ErrorMessage    string `json:"errorMessage"`
-	CompletedLength string `json:"completedLength"`
-	TotalLength     string `json:"totalLength"`
-	DownloadSpeed   string `json:"downloadSpeed"`
-	NumSeeders      string `json:"numSeeders"`
-	Connections     string `json:"connections"`
+	Status          string   `json:"status"`
+	ErrorCode       string   `json:"errorCode"`
+	ErrorMessage    string   `json:"errorMessage"`
+	CompletedLength string   `json:"completedLength"`
+	TotalLength     string   `json:"totalLength"`
+	DownloadSpeed   string   `json:"downloadSpeed"`
+	NumSeeders      string   `json:"numSeeders"`
+	Connections     string   `json:"connections"`
 	FollowedBy      []string `json:"followedBy"`
 	Bittorrent      struct {
 		Info struct {

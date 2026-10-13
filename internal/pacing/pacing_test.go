@@ -52,3 +52,69 @@ func TestBackoffExhaustion(t *testing.T) {
 		t.Error("Reset should clear attempts")
 	}
 }
+
+func TestTelegramLimiter_InFlood(t *testing.T) {
+	lim := NewTelegramLimiter()
+	if lim.InFlood(123) {
+		t.Error("expected not in flood initially")
+	}
+
+	lim.NotifyFloodWait(2, 123)
+	if !lim.InFlood(123) {
+		t.Error("expected chat 123 in flood wait")
+	}
+	if lim.InFlood(456) {
+		t.Error("chat 456 should not be in flood wait")
+	}
+
+	lim.NotifyFloodWait(2, 0) // global
+	if !lim.InFlood(456) {
+		t.Error("chat 456 should be in flood wait due to global penalty")
+	}
+}
+
+func TestTelegramLimiter_RecordDone(t *testing.T) {
+	lim := NewTelegramLimiter()
+	lim.chatGap = 10 * time.Millisecond
+	lim.uploadGap = 50 * time.Millisecond
+
+	ctx := t.Context()
+	if err := lim.AcquireUpload(ctx, 123); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	lim.RecordUploadDone(123)
+
+	if err := lim.AcquireUpload(ctx, 123); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("expected upload gap >= 40ms, got %v", elapsed)
+	}
+}
+
+func TestTelegramLimiter_SlidingWindow(t *testing.T) {
+	lim := NewTelegramLimiter()
+	lim.chatGap = 5 * time.Millisecond
+	lim.maxCalls = 3
+	lim.windowDur = 80 * time.Millisecond
+
+	ctx := t.Context()
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		if err := lim.Acquire(ctx, 999); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The 4th call must wait for the sliding window to free up a slot (from start of 1st call)
+	if err := lim.Acquire(ctx, 999); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 75*time.Millisecond {
+		t.Errorf("expected total window time >= 75ms, got %v", elapsed)
+	}
+}

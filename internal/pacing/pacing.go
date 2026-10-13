@@ -70,10 +70,12 @@ func RandomDelay(ctx context.Context, min, max time.Duration, multiplier float64
 // ---- Telegram rate limiter ---------------------------------------------
 
 const (
-	staleAfter       = 24 * time.Hour
-	perUploadGap     = 3 * time.Second
-	defaultChatGap   = 2 * time.Second
-	defaultGlobalOPS = 30.0
+	staleAfter         = 24 * time.Hour
+	perUploadGap       = 4 * time.Second
+	defaultChatGap     = 3 * time.Second
+	defaultGlobalOPS   = 30.0
+	chatWindowDuration = 60 * time.Second
+	maxCallsPerWindow  = 18 // Telegram allows 20 msgs/min per chat; keep safety buffer of 2
 )
 
 type chatState struct {
@@ -82,6 +84,7 @@ type chatState struct {
 	lastUpload  time.Time
 	floodUntil  time.Time
 	lastTouched time.Time
+	history     []time.Time // timestamps of recent calls within chatWindowDuration
 }
 
 // TelegramLimiter enforces global and per-chat pacing plus FloodWait penalties.
@@ -92,10 +95,20 @@ type TelegramLimiter struct {
 	globalFlood time.Time
 	globalOPS   float64
 	chatGap     time.Duration
+	uploadGap   time.Duration
+	maxCalls    int
+	windowDur   time.Duration
 }
 
 func NewTelegramLimiter() *TelegramLimiter {
-	return &TelegramLimiter{chats: map[int64]*chatState{}, globalOPS: defaultGlobalOPS, chatGap: defaultChatGap}
+	return &TelegramLimiter{
+		chats:     map[int64]*chatState{},
+		globalOPS: defaultGlobalOPS,
+		chatGap:   defaultChatGap,
+		uploadGap: perUploadGap,
+		maxCalls:  maxCallsPerWindow,
+		windowDur: chatWindowDuration,
+	}
 }
 
 func (l *TelegramLimiter) chat(id int64) *chatState {
@@ -103,10 +116,9 @@ func (l *TelegramLimiter) chat(id int64) *chatState {
 	defer l.mu.Unlock()
 	c, ok := l.chats[id]
 	if !ok {
-		c = &chatState{}
+		c = &chatState{lastTouched: time.Now()}
 		l.chats[id] = c
 	}
-	c.lastTouched = time.Now()
 	return c
 }
 
@@ -120,14 +132,7 @@ func (l *TelegramLimiter) Acquire(ctx context.Context, chatID int64) error {
 			return err
 		}
 	}
-	c := l.chat(chatID)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if w := time.Until(c.floodUntil); w > 0 {
-		if err := Sleep(ctx, w); err != nil {
-			return err
-		}
-	}
+
 	// Global pacing: reserve the next slot under the lock, sleep outside it.
 	l.mu.Lock()
 	slot := l.globalLast.Add(time.Duration(float64(time.Second) / l.globalOPS))
@@ -139,13 +144,83 @@ func (l *TelegramLimiter) Acquire(ctx context.Context, chatID int64) error {
 	if err := Sleep(ctx, time.Until(slot)); err != nil {
 		return err
 	}
-	if w := l.chatGap - time.Since(c.lastCall); w > 0 {
-		if err := Sleep(ctx, w); err != nil {
-			return err
-		}
+
+	if chatID == 0 {
+		return nil
 	}
-	c.lastCall = time.Now()
+
+	c := l.chat(chatID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for {
+		now := time.Now()
+		// 1. Check chat flood wait
+		if w := c.floodUntil.Sub(now); w > 0 {
+			c.mu.Unlock()
+			err := Sleep(ctx, w)
+			c.mu.Lock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		// 2. Check per-chat gap
+		if w := l.chatGap - now.Sub(c.lastCall); w > 0 {
+			c.mu.Unlock()
+			err := Sleep(ctx, w)
+			c.mu.Lock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		// 3. Sliding window check (max calls per 60s)
+		cutoff := now.Add(-l.windowDur)
+		i := 0
+		for i < len(c.history) && c.history[i].Before(cutoff) {
+			i++
+		}
+		if i > 0 {
+			c.history = c.history[i:]
+		}
+
+		if l.maxCalls > 0 && len(c.history) >= l.maxCalls {
+			oldest := c.history[0]
+			waitDur := oldest.Add(l.windowDur).Sub(now)
+			if waitDur > 0 {
+				c.mu.Unlock()
+				err := Sleep(ctx, waitDur)
+				c.mu.Lock()
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
+		break
+	}
+
+	now := time.Now()
+	c.lastCall = now
+	c.history = append(c.history, now)
+	c.lastTouched = now
 	return nil
+}
+
+// SetGaps overrides the per-chat call gap and upload gap (useful for testing).
+func (l *TelegramLimiter) SetGaps(chatGap, uploadGap time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.chatGap = chatGap
+	if uploadGap <= 0 {
+		l.uploadGap = -1
+	} else {
+		l.uploadGap = uploadGap
+	}
 }
 
 // AcquireUpload applies the stricter upload spacing on top of Acquire.
@@ -153,21 +228,100 @@ func (l *TelegramLimiter) AcquireUpload(ctx context.Context, chatID int64) error
 	if err := l.Acquire(ctx, chatID); err != nil {
 		return err
 	}
+	if chatID == 0 {
+		return nil
+	}
 	c := l.chat(chatID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if w := perUploadGap - time.Since(c.lastUpload); w > 0 {
-		if err := Sleep(ctx, w); err != nil {
-			return err
-		}
+
+	gap := l.uploadGap
+	if gap < 0 {
+		gap = 0
+	} else if gap == 0 {
+		gap = perUploadGap
 	}
-	c.lastUpload = time.Now()
+	for {
+		now := time.Now()
+		if w := gap - now.Sub(c.lastUpload); w > 0 {
+			c.mu.Unlock()
+			err := Sleep(ctx, w)
+			c.mu.Lock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		break
+	}
+	now := time.Now()
+	c.lastUpload = now
+	c.lastTouched = now
 	return nil
+}
+
+// InFlood reports whether the chat (or global bot API) is currently in a flood wait penalty.
+func (l *TelegramLimiter) InFlood(chatID int64) bool {
+	l.mu.Lock()
+	gf := l.globalFlood
+	l.mu.Unlock()
+	if time.Now().Before(gf) {
+		return true
+	}
+	if chatID == 0 {
+		return false
+	}
+	l.mu.Lock()
+	c, ok := l.chats[chatID]
+	l.mu.Unlock()
+	if !ok || c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Before(c.floodUntil)
+}
+
+// RecordCallDone updates the completion timestamp of a Telegram API call.
+func (l *TelegramLimiter) RecordCallDone(chatID int64) {
+	if chatID == 0 {
+		return
+	}
+	c := l.chat(chatID)
+	c.mu.Lock()
+	now := time.Now()
+	if now.After(c.lastCall) {
+		c.lastCall = now
+	}
+	c.lastTouched = now
+	c.mu.Unlock()
+}
+
+// RecordUploadDone updates the completion timestamp of an upload operation.
+func (l *TelegramLimiter) RecordUploadDone(chatID int64) {
+	if chatID == 0 {
+		return
+	}
+	c := l.chat(chatID)
+	c.mu.Lock()
+	now := time.Now()
+	if now.After(c.lastUpload) {
+		c.lastUpload = now
+	}
+	if now.After(c.lastCall) {
+		c.lastCall = now
+	}
+	c.lastTouched = now
+	c.mu.Unlock()
 }
 
 // NotifyFloodWait registers a penalty. chatID == 0 applies globally.
 func (l *TelegramLimiter) NotifyFloodWait(seconds int, chatID int64) {
-	until := time.Now().Add(time.Duration(seconds)*time.Second + time.Second)
+	margin := 2 * time.Second
+	if seconds == 0 {
+		margin = 1 * time.Second
+	}
+	until := time.Now().Add(time.Duration(seconds)*time.Second + margin)
 	if chatID == 0 {
 		l.mu.Lock()
 		if until.After(l.globalFlood) {

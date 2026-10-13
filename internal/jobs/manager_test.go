@@ -26,19 +26,24 @@ func TestCleanupOrphans(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	liveJob := &store.Job{ID: "1"}
+	deadJob := &store.Job{ID: "2"}
+
 	dirsToCreate := []string{
-		"job_1",
-		"job_1_extract",
-		"job_1_pd_temp",
-		"job_2",
-		"job_2_extract",
-		"job_2_patch_work",
+		liveJob.DownloadDir(),
+		liveJob.DownloadDir() + "_extract",
+		liveJob.MirrorTempDirName(),
+		deadJob.DownloadDir(),
+		deadJob.DownloadDir() + "_extract",
+		deadJob.DownloadDir() + "_patch_work",
+		deadJob.MirrorTempDirName(),
 		"tmp_up_abc",
 		"tmp_conf_xyz",
+		"tmp_up_active",
 		"important_folder",
 	}
 
-	oldTime := time.Now().Add(-20 * time.Minute)
+	oldTime := time.Now().Add(-7 * time.Hour)
 	for _, d := range dirsToCreate {
 		p := filepath.Join(downloads, d)
 		if err := os.MkdirAll(p, 0o755); err != nil {
@@ -47,24 +52,27 @@ func TestCleanupOrphans(t *testing.T) {
 		_ = os.Chtimes(p, oldTime, oldTime)
 	}
 
-	keep := []*store.Job{
-		{ID: "1"}, // j.DownloadDir() is "job_1"
-	}
+	// Register tmp_up_active with activeTmp
+	release := m.RegisterTempDir(filepath.Join(downloads, "tmp_up_active"))
+
+	keep := []*store.Job{liveJob}
 
 	m.cleanupOrphans(keep)
 
 	// Check which should exist
 	shouldExist := map[string]bool{
-		"job_1":            true,
-		"job_1_extract":    true,
-		"job_1_pd_temp":    true,
-		"important_folder": true,
+		liveJob.DownloadDir():              true,
+		liveJob.DownloadDir() + "_extract": true,
+		liveJob.MirrorTempDirName():        true,
+		"tmp_up_active":                    true,
+		"important_folder":                 true,
 	}
 
 	shouldNotExist := []string{
-		"job_2",
-		"job_2_extract",
-		"job_2_patch_work",
+		deadJob.DownloadDir(),
+		deadJob.DownloadDir() + "_extract",
+		deadJob.DownloadDir() + "_patch_work",
+		deadJob.MirrorTempDirName(),
 		"tmp_up_abc",
 		"tmp_conf_xyz",
 	}
@@ -81,5 +89,13 @@ func TestCleanupOrphans(t *testing.T) {
 		if _, err := os.Stat(p); err == nil {
 			t.Errorf("expected %s to be deleted, but still exists", d)
 		}
+	}
+
+	// Release active temp dir and assert it is removed on next cleanupOrphans
+	release()
+	m.cleanupOrphans(keep)
+	activePath := filepath.Join(downloads, "tmp_up_active")
+	if _, err := os.Stat(activePath); err == nil {
+		t.Errorf("expected tmp_up_active to be deleted after release, but still exists")
 	}
 }

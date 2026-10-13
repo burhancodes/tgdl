@@ -365,7 +365,7 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 	name := filepath.Base(f)
 	chat := job.ChatID
 
-	extractAndUpload := func() error {
+	extractOnly := func() error {
 		statusMsg := m.send(st, status.Extracting(job.ID, name), tg.SendOpts{Keyboard: cancelKeyboard(job.ID)})
 		defer m.del(statusMsg)
 		if err := m.extract(st, f, name); err != nil {
@@ -373,7 +373,10 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		}
 		ok := m.send(st, statusOK(job.ID, name), tg.SendOpts{})
 		m.delLater(ok, 5*time.Second)
-		m.consumeArchive(st, f, rel)
+		return nil
+	}
+
+	uploadExtracted := func() error {
 		if files := fsutil.ListUploadable(st.Extract); len(files) > 0 {
 			total := job.TotalFiles + len(files)
 			_ = m.d.Store.UpdateProgress(context.Background(), job.ID, storeTotal(total))
@@ -391,7 +394,7 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		if !st.sess.markExtracted(rel) {
 			return true
 		}
-		if err := extractAndUpload(); err != nil {
+		if err := extractOnly(); err != nil {
 			if st.ctx.Err() == nil {
 				fail := m.send(st, status.ExtractionFailed(job.ID, name), tg.SendOpts{})
 				m.delLater(fail, 5*time.Second)
@@ -399,6 +402,8 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 			}
 			return true
 		}
+		m.consumeArchive(st, f, rel)
+		_ = uploadExtracted()
 		return true
 	}
 
@@ -408,9 +413,14 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 	if !decided {
 		p := st.sess.archivePrompt(id)
 		kb := tg.Keyboard{
-			{tg.Button{Text: "Archive Only", Data: fmt.Sprintf("archive_only:%s:%s", job.ID, id)},
-				tg.Button{Text: "Extract & Upload Both", Data: fmt.Sprintf("archive_ext:%s:%s", job.ID, id)}},
-			{tg.Button{Text: "Cancel", Data: "cancel_job:" + job.ID}},
+			{
+				tg.Button{Text: "Archive Only", Data: fmt.Sprintf("archive_only:%s:%s", job.ID, id)},
+				tg.Button{Text: "Extract Only", Data: fmt.Sprintf("archive_ext_only:%s:%s", job.ID, id)},
+			},
+			{
+				tg.Button{Text: "Extract & Upload Both", Data: fmt.Sprintf("archive_ext:%s:%s", job.ID, id)},
+				tg.Button{Text: "Cancel", Data: "cancel_job:" + job.ID},
+			},
 		}
 		msg := m.send(st, status.ArchivePrompt(job.ID, name), tg.SendOpts{Keyboard: kb})
 		choice, decided = p.wait(st.ctx, promptTimeout)
@@ -421,11 +431,27 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		m.del(msg)
 		_ = chat
 	}
+	if choice == ChoiceExtractOnly && st.sess.markExtracted(rel) {
+		if err := extractOnly(); err != nil {
+			if st.ctx.Err() == nil {
+				fail := m.send(st, status.ExtractionFailed(job.ID, name), tg.SendOpts{})
+				m.delLater(fail, 5*time.Second)
+			}
+			return true
+		}
+		m.consumeArchive(st, f, rel)
+		_ = uploadExtracted()
+		return true
+	}
 	if choice == ChoiceExtract && st.sess.markExtracted(rel) {
-		if err := extractAndUpload(); err != nil && st.ctx.Err() == nil {
-			slog.Warn("extraction failed; uploading the archive only", "file", name, "err", err)
-			fail := m.send(st, status.ExtractionFailed(job.ID, name), tg.SendOpts{})
-			m.delLater(fail, 5*time.Second)
+		if err := extractOnly(); err != nil {
+			if st.ctx.Err() == nil {
+				slog.Warn("extraction failed; uploading the archive only", "file", name, "err", err)
+				fail := m.send(st, status.ExtractionFailed(job.ID, name), tg.SendOpts{})
+				m.delLater(fail, 5*time.Second)
+			}
+		} else {
+			_ = uploadExtracted()
 		}
 	}
 	return false

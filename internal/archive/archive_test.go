@@ -1,9 +1,11 @@
 package archive
 
 import (
+	"archive/zip"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -88,5 +90,52 @@ func TestGlobSorted_VolumeNaming(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("index %d: got %s, want %s", i, got[i], want[i])
 		}
+	}
+}
+
+func TestExtract_MaxExtractFiles(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "test.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for i := 1; i <= 5; i++ {
+		zf, err := zw.Create(fmt.Sprintf("file%d.txt", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := zf.Write([]byte("content")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	destFail := filepath.Join(dir, "dest_fail")
+	// Limit is 3 files, archive contains 5 files
+	lim := ExtractLimits{
+		MaxExtractFiles:  3,
+		MinFreeDiskBytes: 1024,
+	}
+	err = Extract(t.Context(), zipPath, destFail, "", lim)
+	if err == nil {
+		t.Fatal("expected error exceeding MaxExtractFiles, got nil")
+	}
+	if !strings.Contains(err.Error(), "maximum file count limit") {
+		t.Errorf("expected error to mention maximum file count limit, got: %v", err)
+	}
+
+	destPass := filepath.Join(dir, "dest_pass")
+	limPass := ExtractLimits{
+		MaxExtractFiles:  10,
+		MinFreeDiskBytes: 1024,
+	}
+	err = Extract(t.Context(), zipPath, destPass, "", limPass)
+	if err != nil {
+		t.Fatalf("expected successful extraction, got: %v", err)
 	}
 }

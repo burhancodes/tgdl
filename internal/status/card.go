@@ -46,10 +46,10 @@ type Snapshot struct {
 	PatchOutput    string
 
 	// Post-processing.
-	Converting   bool
-	ConvertFile  string
-	Archiving    bool
-	ArchiveFmt   string
+	Converting  bool
+	ConvertFile string
+	Archiving   bool
+	ArchiveFmt  string
 
 	// Upload stage.
 	TotalFiles   int
@@ -60,8 +60,8 @@ type Snapshot struct {
 	UploadSpeed  float64
 	UploadActive bool
 
-	Hosts      map[string]HostState
-	HostOrder  []string
+	Hosts        map[string]HostState
+	HostOrder    []string
 	MirrorLabels map[string]string
 
 	Stats *SystemStats

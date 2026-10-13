@@ -223,7 +223,14 @@ func (d *Direct) getBoundedBytes(ctx context.Context, u string, limit int64) ([]
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response exceeded limit of %d bytes", limit)
+	}
+	return b, nil
 }
 
 // downloadHLS fetches a VOD playlist's segments through the SSRF-guarded

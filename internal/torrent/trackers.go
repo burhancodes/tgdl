@@ -3,12 +3,12 @@ package torrent
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"io"
 	"sort"
 	"strings"
 	"sync"

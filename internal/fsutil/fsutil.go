@@ -221,7 +221,7 @@ func SortNatural(paths []string) {
 	for i, p := range paths {
 		items[i] = pathWithKey{key: makeSortKey(p), path: p}
 	}
-	sort.Slice(items, func(i, j int) bool {
+	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].key.less(&items[j].key)
 	})
 	for i, it := range items {
@@ -243,7 +243,7 @@ func SortNaturalFileInfo(infos []FileInfo) {
 	for i, info := range infos {
 		items[i] = fileInfoWithKey{key: makeSortKey(info.Path), info: info}
 	}
-	sort.Slice(items, func(i, j int) bool {
+	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].key.less(&items[j].key)
 	})
 	for i, it := range items {

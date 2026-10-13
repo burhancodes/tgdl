@@ -128,4 +128,3 @@ func IsBadRequest(err error) (string, bool) {
 // was fully written to the wire. Automatic retries are unsafe because the
 // server may still complete the upload, which would create duplicate messages.
 var ErrAmbiguousUpload = errors.New("telegram upload failed after request body was sent; state ambiguous")
-

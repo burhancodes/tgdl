@@ -63,7 +63,9 @@ type RunOpts struct {
 
 func isFile(p string) bool { st, err := os.Stat(p); return err == nil && st.Mode().IsRegular() }
 
-func (r *Runner) userDir(uid int64) string { return filepath.Join(r.cfg.AuthDir, strconv.FormatInt(uid, 10)) }
+func (r *Runner) userDir(uid int64) string {
+	return filepath.Join(r.cfg.AuthDir, strconv.FormatInt(uid, 10))
+}
 
 // GDLConfigPath resolves the gallery-dl config: user -> configs/ -> global.
 func (r *Runner) GDLConfigPath(uid int64) string {
@@ -243,10 +245,10 @@ type procOut struct {
 }
 
 var (
-	cdlLockRE      = regexp.MustCompile(`(?i)Lock for '([^']+)' acquired`)
-	cdlDoneRE      = regexp.MustCompile(`(?i)(?:Download Complete|Completed):\s*([^\n\r]+)`)
-	cdlFailedRE    = regexp.MustCompile(`(?i)Failed:\s*(\d+)\s*files`)
-	cdlDownloadRE  = regexp.MustCompile(`(?i)Downloaded:\s*(\d+)\s*files`)
+	cdlLockRE     = regexp.MustCompile(`(?i)Lock for '([^']+)' acquired`)
+	cdlDoneRE     = regexp.MustCompile(`(?i)(?:Download Complete|Completed):\s*([^\n\r]+)`)
+	cdlFailedRE   = regexp.MustCompile(`(?i)Failed:\s*(\d+)\s*files`)
+	cdlDownloadRE = regexp.MustCompile(`(?i)Downloaded:\s*(\d+)\s*files`)
 )
 
 func tail(lines []string, n int) []string {

@@ -49,6 +49,7 @@ The provided `docker-compose.yml` configures hard container limits and kernel OO
 - **Memory**: `mem_limit: ${BOTAPI_MEM:-3g}`, `memswap_limit: ${BOTAPI_MEM:-3g}`.
 - **CPUs**: `cpus: ${BOTAPI_CPUS:-2}`.
 - **PIDs**: `pids_limit: 512`.
+- **User / Permissions**: Both `tgdl` and `telegram-bot-api` run under `user: "${UID:-1000}:${GID:-1000}"` so the local Bot API server container can read files created by `tgdl` (including thumbnails and downloads) when using `TG_BOT_API_LOCAL_DIR_MAP`.
 - **Note**: The official Telegram Bot API server may legitimately use several hundred megabytes of RAM when spooling large 1.5–2 GB uploads or downloads.
 
 ### `magnetio-scraper`

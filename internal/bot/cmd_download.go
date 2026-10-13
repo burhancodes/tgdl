@@ -65,6 +65,7 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 	defer file.Close()
 	var out []string
 	sc := bufio.NewScanner(io.LimitReader(file, 2<<20))
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if isURLToken(line) {

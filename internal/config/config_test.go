@@ -79,4 +79,3 @@ func TestParseLocalDirMap(t *testing.T) {
 		}
 	}
 }
-

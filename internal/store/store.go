@@ -50,6 +50,9 @@ type Job struct {
 // DownloadDir is the job's directory name beneath the downloads root.
 func (j *Job) DownloadDir() string { return "job_" + j.ID }
 
+// MirrorTempDirName is the temporary directory name for Pixeldrain archive mirroring.
+func (j *Job) MirrorTempDirName() string { return j.ID + "_pd_temp" }
+
 // Update carries optional field updates; nil pointers are left untouched.
 type Update struct {
 	Status       *Status

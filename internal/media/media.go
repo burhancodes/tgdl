@@ -161,9 +161,15 @@ func ProbeAudio(ctx context.Context, path string) AudioInfo {
 
 // ---- images --------------------------------------------------------------
 
+// TelegramPhotoMaxSize is the strict maximum file size Telegram allows for photos (10 MB).
+const TelegramPhotoMaxSize int64 = 10 * 1024 * 1024
+
 // PhotoInvalidForTelegram reports images that Telegram's photo API rejects
-// (bad dimensions/aspect ratio, palette/CMYK colour) so they go as documents.
+// (size > 10MB, bad dimensions/aspect ratio, palette/CMYK colour) so they go as documents.
 func PhotoInvalidForTelegram(ctx context.Context, path string) bool {
+	if st, err := os.Stat(path); err == nil && st.Size() > TelegramPhotoMaxSize {
+		return true
+	}
 	p, err := probe(ctx, path)
 	if err != nil || len(p.Streams) == 0 {
 		return true
@@ -214,6 +220,7 @@ func tempJPG(stem string) (string, error) {
 	}
 	name := f.Name()
 	_ = f.Close()
+	_ = os.Chmod(name, 0o644)
 	return name, nil
 }
 
@@ -300,7 +307,11 @@ func ConvertVideoToMKV(ctx context.Context, in, out string) bool {
 		return false
 	}
 	st, err := os.Stat(out)
-	return err == nil && st.Size() > 0
+	if err == nil && st.Size() > 0 {
+		_ = os.Chmod(out, 0o644)
+		return true
+	}
+	return false
 }
 
 // ConvertAudioToMP3 transcodes to 320k MP3, preserving tags.
@@ -312,7 +323,11 @@ func ConvertAudioToMP3(ctx context.Context, in, out string) bool {
 		return false
 	}
 	st, err := os.Stat(out)
-	return err == nil && st.Size() > 0
+	if err == nil && st.Size() > 0 {
+		_ = os.Chmod(out, 0o644)
+		return true
+	}
+	return false
 }
 
 // ---- splitting -----------------------------------------------------------
@@ -339,6 +354,7 @@ func SplitBinary(path string, maxBytes int64) ([]string, error) {
 			cleanup()
 			return nil, err
 		}
+		_ = os.Chmod(part, 0o644)
 		written, cerr := io.CopyN(out, in, chunk)
 		if err := out.Close(); err != nil && cerr == nil {
 			cerr = err

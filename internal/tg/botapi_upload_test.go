@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/go-telegram/bot"
 )
 
 func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
@@ -582,5 +585,199 @@ func TestUpload_ErrorMapping(t *testing.T) {
 	}
 	if errors.Is(err, ErrAmbiguousUpload) {
 		t.Errorf("early failure should NOT be ErrAmbiguousUpload, got: %v", err)
+	}
+}
+
+func TestUpload_FileMode_TimeoutCalculation(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "sparse_600mb.bin")
+	f, err := os.Create(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size600MB = int64(600 * 1024 * 1024)
+	if err := f.Truncate(size600MB); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	var recordedTimeout time.Duration
+	var handlerCalled atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled.Store(true)
+		// Fake server delays its response
+		time.Sleep(20 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok": true, "result": {"message_id": 100}}`))
+	}))
+	defer server.Close()
+
+	api := NewBotAPI(nil, "TESTTOKEN")
+	api.BaseURL = server.URL
+	api.SetLocalDirMap(tempDir, "/container/downloads")
+
+	var recordedDeadline time.Time
+	var hasDeadline bool
+	baseTr := api.uploadClient.Transport
+	if baseTr == nil {
+		baseTr = http.DefaultTransport
+	}
+	api.uploadClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			recordedDeadline, hasDeadline = req.Context().Deadline()
+			return baseTr.RoundTrip(req)
+		}),
+	}
+
+	expectedMinTimeout := 15*time.Minute + time.Duration(size600MB/(512*1024))*time.Second
+	var progCurr atomic.Int64
+	err = api.Upload(context.Background(), 123, Upload{
+		Path: filePath,
+		Kind: KindDocument,
+		Progress: func(curr, total int64) {
+			progCurr.Store(curr)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+	if !handlerCalled.Load() {
+		t.Fatal("handler was not called")
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context did not have a deadline")
+	}
+	recordedTimeout = time.Until(recordedDeadline)
+	if recordedTimeout < expectedMinTimeout-10*time.Second {
+		t.Errorf("computed timeout %v is less than expected minimum %v", recordedTimeout, expectedMinTimeout)
+	}
+	if progCurr.Load() != size600MB {
+		t.Errorf("expected final progress %d, got %d", size600MB, progCurr.Load())
+	}
+}
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestUpload_FileMode_FallbackOn400(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "fallback_doc.txt")
+	testData := []byte("FALLBACK_STREAMED_PAYLOAD")
+	if err := os.WriteFile(filePath, testData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var reqCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := reqCount.Add(1)
+		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("parse media type: %v", err)
+		}
+		mr := multipart.NewReader(r.Body, params["boundary"])
+
+		hasFilePart := false
+		for {
+			p, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				break
+			}
+			if p.FileName() != "" {
+				hasFilePart = true
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if count == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"ok": false, "error_code": 400, "description": "wrong file identifier/HTTP URL specified"}`))
+			return
+		}
+
+		if !hasFilePart {
+			t.Errorf("expected file part on retry, but none found")
+		}
+		w.Write([]byte(`{"ok": true, "result": {"message_id": 200}}`))
+	}))
+	defer server.Close()
+
+	api := NewBotAPI(nil, "TESTTOKEN")
+	api.BaseURL = server.URL
+	api.SetLocalDirMap(tempDir, "/container/downloads")
+
+	err := api.Upload(context.Background(), 123, Upload{
+		Path: filePath,
+		Kind: KindDocument,
+	})
+	if err != nil {
+		t.Fatalf("Upload with retry failed: %v", err)
+	}
+	if reqCount.Load() != 2 {
+		t.Errorf("expected 2 requests (attempt + retry), got %d", reqCount.Load())
+	}
+}
+
+func TestDownload_SameFileTwice_LocalBotAPI(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "botapi_data")
+	destDir1 := filepath.Join(tempDir, "dest1")
+	destDir2 := filepath.Join(tempDir, "dest2")
+	_ = os.MkdirAll(dataDir, 0o755)
+
+	srcFilePath := filepath.Join(dataDir, "video123.mp4")
+	fileContent := []byte("SIMULATED_TG_BOT_API_SAVED_VIDEO")
+	if err := os.WriteFile(srcFilePath, fileContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := fmt.Sprintf(`{"ok": true, "result": {"file_id": "file_abc", "file_unique_id": "u_abc", "file_size": %d, "file_path": "%s"}}`,
+			len(fileContent), srcFilePath)
+		w.Write([]byte(resp))
+	}))
+	defer server.Close()
+
+	b, err := bot.New("TESTTOKEN", bot.WithServerURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := NewBotAPI(b, "TESTTOKEN")
+	api.BaseURL = server.URL
+	api.SetDataDir(dataDir)
+
+	fRef := FileRef{FileID: "file_abc", Name: "video123.mp4", Size: int64(len(fileContent))}
+
+	// First download
+	p1, err := api.Download(context.Background(), fRef, destDir1, nil)
+	if err != nil {
+		t.Fatalf("first Download failed: %v", err)
+	}
+	d1, err := os.ReadFile(p1)
+	if err != nil || !bytes.Equal(d1, fileContent) {
+		t.Fatalf("downloaded file 1 invalid: %v", err)
+	}
+
+	// Verify source file still exists in dataDir!
+	if _, err := os.Stat(srcFilePath); err != nil {
+		t.Fatalf("source file in dataDir was removed after first download: %v", err)
+	}
+
+	// Second download of the same file_id
+	p2, err := api.Download(context.Background(), fRef, destDir2, nil)
+	if err != nil {
+		t.Fatalf("second Download failed: %v", err)
+	}
+	d2, err := os.ReadFile(p2)
+	if err != nil || !bytes.Equal(d2, fileContent) {
+		t.Fatalf("downloaded file 2 invalid: %v", err)
 	}
 }

@@ -86,7 +86,7 @@ func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFi
 				need += uint64(f.Size)
 			}
 			if free < need {
-				a.reply(ctx, m, "Upload aborted: insufficient disk space on server (less than 2 GiB free).")
+				a.reply(ctx, m, fmt.Sprintf("Upload aborted: insufficient disk space on server (less than %s free).", status.Size(float64(a.cfg.MinFreeDiskBytes))))
 				return
 			}
 		}
@@ -133,6 +133,9 @@ func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.
 	}
 	if cfg.LocalHostPrefix != "" {
 		api.SetLocalDirMap(cfg.LocalHostPrefix, cfg.LocalContainerPrefix)
+		if err := api.ProbeLocalDirMap(context.Background(), cfg.DataDir); err != nil {
+			slog.Error("TG_BOT_API_LOCAL_DIR_MAP probe failed: local telegram-bot-api server cannot access files in DataDir; check container uid:gid permissions or unset TG_BOT_API_LOCAL_DIR_MAP", "err", err)
+		}
 	}
 	if cfg.BotAPIDataDir != "" {
 		api.SetDataDir(cfg.BotAPIDataDir)
@@ -275,15 +278,35 @@ func userID(m *models.Message) int64 {
 }
 
 func (a *App) reply(ctx context.Context, m *models.Message, html string) {
+	if a.lim != nil {
+		_ = a.lim.Acquire(ctx, m.Chat.ID)
+	}
 	if _, err := a.tg.Send(ctx, m.Chat.ID, html, tg.SendOpts{ReplyTo: m.ID}); err != nil {
+		if a.lim != nil {
+			if secs, ok := tg.IsFlood(err); ok {
+				a.lim.NotifyFloodWait(secs, m.Chat.ID)
+			}
+		}
 		slog.Warn("reply failed", "err", err)
+	} else if a.lim != nil {
+		a.lim.RecordCallDone(m.Chat.ID)
 	}
 }
 
 func (a *App) replyKB(ctx context.Context, m *models.Message, html string, kb tg.Keyboard) tg.MessageRef {
+	if a.lim != nil {
+		_ = a.lim.Acquire(ctx, m.Chat.ID)
+	}
 	ref, err := a.tg.Send(ctx, m.Chat.ID, html, tg.SendOpts{ReplyTo: m.ID, Keyboard: kb})
 	if err != nil {
+		if a.lim != nil {
+			if secs, ok := tg.IsFlood(err); ok {
+				a.lim.NotifyFloodWait(secs, m.Chat.ID)
+			}
+		}
 		slog.Warn("reply failed", "err", err)
+	} else if a.lim != nil {
+		a.lim.RecordCallDone(m.Chat.ID)
 	}
 	return ref
 }

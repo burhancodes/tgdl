@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	apkEditorRelease = "https://api.github.com/repos/REAndroid/APKEditor/releases/latest"
+	apkEditorRelease  = "https://api.github.com/repos/REAndroid/APKEditor/releases/latest"
 	uberSignerRelease = "https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest"
-	tgPatcherURL     = "https://raw.githubusercontent.com/AbhiTheModder/termux-scripts/refs/heads/main/tgpatcher.py"
+	tgPatcherURL      = "https://raw.githubusercontent.com/AbhiTheModder/termux-scripts/refs/heads/main/tgpatcher.py"
 )
 
 // Patcher implements jobs.Patcher.
@@ -237,6 +237,7 @@ func (p *Patcher) Patch(ctx context.Context, input, outDir, originalName string,
 	if err := p.alignAndSign(ctx, java, unaligned, final, ks); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(final, 0o644)
 	return final, nil
 }
 

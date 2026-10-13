@@ -41,9 +41,10 @@ type State struct {
 	killer func() // e.g. aria2 GID force-remove
 
 	// Status message.
-	msg      tg.MessageRef
-	lastText string
-	pinned   bool
+	msg        tg.MessageRef
+	lastText   string
+	lastEditAt time.Time
+	pinned     bool
 
 	// Download metrics.
 	engine       string
@@ -313,7 +314,7 @@ func (s *State) isUploaded(rel string) bool {
 	_, ok := s.uploaded[rel]
 	return ok
 }
-func (s *State) markFailed(rel string)   { s.mu.Lock(); s.failed[rel] = struct{}{}; s.mu.Unlock() }
+func (s *State) markFailed(rel string) { s.mu.Lock(); s.failed[rel] = struct{}{}; s.mu.Unlock() }
 func (s *State) beginUpload(rel, name string) {
 	s.mu.Lock()
 	s.uploading[rel], s.currentUpload = struct{}{}, name
@@ -416,7 +417,11 @@ func (s *State) setHosts(h map[string]status.HostState) {
 	s.Poke()
 }
 
-func (s *State) addMirror(r MirrorRecord) { s.mu.Lock(); s.mirrors = append(s.mirrors, r); s.mu.Unlock() }
+func (s *State) addMirror(r MirrorRecord) {
+	s.mu.Lock()
+	s.mirrors = append(s.mirrors, r)
+	s.mu.Unlock()
+}
 
 // Snapshot copies the state into a renderable status.Snapshot.
 func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {

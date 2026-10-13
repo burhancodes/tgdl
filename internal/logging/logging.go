@@ -102,35 +102,17 @@ func Setup(cfg *config.Config) func() {
 	return closer
 }
 
-// TruncateLogFile checks the file at path and, if it exceeds maxSize, truncates it
-// to keep at most the last 1 MiB.
+// TruncateLogFile checks the file at path and, if it exceeds maxSize, rotates it
+// by rename to path+".1" to avoid sparse file creation in processes (like aria2)
+// that hold open file descriptors.
 func TruncateLogFile(path string, maxSize int64) {
 	st, err := os.Stat(path)
 	if err != nil || st.Size() <= maxSize {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_RDWR, 0o640)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	keepSize := int64(1 << 20)
-	if keepSize > maxSize {
-		keepSize = maxSize / 2
-	}
-	if st.Size() > keepSize {
-		buf := make([]byte, keepSize)
-		_, _ = f.Seek(-keepSize, io.SeekEnd)
-		n, _ := io.ReadFull(f, buf)
-		_ = f.Truncate(0)
-		_, _ = f.Seek(0, io.SeekStart)
-		if n > 0 {
-			_, _ = f.Write(buf[:n])
-		}
-	} else {
-		_ = f.Truncate(0)
-	}
+	rotated := path + ".1"
+	_ = os.Remove(rotated)
+	_ = os.Rename(path, rotated)
 }
 
 // StartLogTruncator runs TruncateLogFile on startup and every hour in a background goroutine.

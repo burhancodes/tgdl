@@ -11,6 +11,7 @@ import (
 const (
 	ChoiceArchiveOnly = "only"
 	ChoiceExtract     = "ext"
+	ChoiceExtractOnly = "ext_only"
 	ChoiceMP3         = "mp3"
 	ChoiceOriginal    = "orig"
 )

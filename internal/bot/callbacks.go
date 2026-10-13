@@ -57,8 +57,11 @@ func (a *App) cbArchive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		return
 	}
 	choice, label := jobs.ChoiceArchiveOnly, "Archive Only"
-	if kind == "archive_ext" {
+	switch kind {
+	case "archive_ext":
 		choice, label = jobs.ChoiceExtract, "Extract & Upload Both"
+	case "archive_ext_only":
+		choice, label = jobs.ChoiceExtractOnly, "Extract Only"
 	}
 	name, ok := a.mgr.SetArchiveChoice(jobID, archiveID, choice)
 	if !ok {

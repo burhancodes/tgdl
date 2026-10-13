@@ -46,20 +46,20 @@ func (NopProcs) Unregister()        {}
 
 // Args mirrors the JSON blob persisted in jobs.args.
 type Args struct {
-	UserID          json.Number    `json:"user_id,omitempty"`
-	Engine          string         `json:"engine,omitempty"`
-	Password        string         `json:"password,omitempty"`
-	ExtraArgs       []string       `json:"extra_args,omitempty"`
-	ArchiveFormat   string         `json:"archive_format,omitempty"`
-	MirrorPixeldrain bool          `json:"mirror_pixeldrain,omitempty"`
-	IsMirror        bool           `json:"is_mirror,omitempty"`
-	UploadTG        bool           `json:"upload_tg,omitempty"`
-	Unzip           bool           `json:"unzip,omitempty"`
-	AsDoc           bool           `json:"as_doc,omitempty"`
-	ReplyMessageID  int            `json:"reply_message_id,omitempty"`
-	TargetURL       string         `json:"target_url,omitempty"`
-	OriginalFilename string        `json:"original_filename,omitempty"`
-	AriaOptions     map[string]any `json:"aria_options,omitempty"`
+	UserID           json.Number    `json:"user_id,omitempty"`
+	Engine           string         `json:"engine,omitempty"`
+	Password         string         `json:"password,omitempty"`
+	ExtraArgs        []string       `json:"extra_args,omitempty"`
+	ArchiveFormat    string         `json:"archive_format,omitempty"`
+	MirrorPixeldrain bool           `json:"mirror_pixeldrain,omitempty"`
+	IsMirror         bool           `json:"is_mirror,omitempty"`
+	UploadTG         bool           `json:"upload_tg,omitempty"`
+	Unzip            bool           `json:"unzip,omitempty"`
+	AsDoc            bool           `json:"as_doc,omitempty"`
+	ReplyMessageID   int            `json:"reply_message_id,omitempty"`
+	TargetURL        string         `json:"target_url,omitempty"`
+	OriginalFilename string         `json:"original_filename,omitempty"`
+	AriaOptions      map[string]any `json:"aria_options,omitempty"`
 	// TGFile references a Telegram-hosted file (replied media) for unzip, patch
 	// and mirror-of-Telegram-file jobs. The Bot API cannot fetch arbitrary
 	// messages by id, so the handler captures the file reference up front.

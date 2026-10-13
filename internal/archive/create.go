@@ -167,15 +167,18 @@ func ArchiveFolder(ctx context.Context, folder string, o FolderOpts) ([]string, 
 			args := []string{"a", flag, fmt.Sprintf("-v%dm", o.MaxPartMB), fmt.Sprintf("-mmt=%d", threads), "-bso0", "-bsp0", "-bb0", "-y"}
 			args = append(args, compArgs...)
 			args = append(args, prefix, ".")
-			if err := execIn(ctx, folder, sz, args...).Run(); err == nil {
-				parts := globSorted(parent, filepath.Base(prefix))
-				if len(parts) > 0 {
-					_ = os.RemoveAll(folder)
-					if o.MirrorPD != nil {
-						mirrorInBackground(ctx, parts, parent, name, o)
-					}
-					return parts, nil
+			runErr := execIn(ctx, folder, sz, args...).Run()
+			parts := globSorted(parent, filepath.Base(prefix))
+			if runErr == nil && len(parts) > 0 {
+				_ = os.RemoveAll(folder)
+				if o.MirrorPD != nil {
+					mirrorInBackground(ctx, parts, parent, name, o)
 				}
+				return parts, nil
+			}
+			// Clean up partial volumes before falling back
+			for _, p := range parts {
+				_ = os.Remove(p)
 			}
 		}
 	}
@@ -235,7 +238,7 @@ func globSorted(dir, prefix string) []string {
 	var out []string
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if !e.IsDir() && (e.Name() == prefix || strings.HasPrefix(e.Name(), prefix+".") || strings.HasPrefix(e.Name(), prefix)) {
+		if !e.IsDir() && (e.Name() == prefix || strings.HasPrefix(e.Name(), prefix+".")) {
 			out = append(out, filepath.Join(dir, e.Name()))
 		}
 	}

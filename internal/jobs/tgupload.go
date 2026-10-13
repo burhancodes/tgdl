@@ -176,6 +176,7 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 		}
 
 		err := u.tg.Upload(ctx, chatID, up)
+		u.lim.RecordUploadDone(chatID)
 		for _, c := range cleanup {
 			_ = os.Remove(c)
 		}
@@ -184,19 +185,27 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 				u.sendScreenshots(ctx, chatID, path, up.Duration)
 			}
 			u.bump(-0.05)
-			return asDoc || force && isImage, nil
+			return asDoc || (force && isImage), nil
 		}
 		if secs, ok := tg.IsFlood(err); ok && flood < 5 {
 			slog.Warn("telegram flood wait on upload", "seconds", secs)
 			u.lim.NotifyFloodWait(secs, chatID)
 			u.bump(0.5)
-			if err := pacing.Sleep(ctx, time.Duration(secs)*time.Second*2); err != nil {
+			waitDur := time.Duration(secs)*time.Second + 2*time.Second
+			if secs == 0 {
+				waitDur = 0
+			}
+			if err := pacing.Sleep(ctx, waitDur); err != nil {
 				return asDoc, err
 			}
 			continue
 		}
 		if msg, ok := tg.IsBadRequest(err); ok && !force {
 			slog.Warn("bad request during upload; retrying as document", "file", filepath.Base(path), "err", msg)
+			low := strings.ToLower(msg)
+			if strings.Contains(low, "photo") || strings.Contains(low, "image") || strings.Contains(low, "media_invalid") || strings.Contains(low, "too big") || strings.Contains(low, "size") {
+				asDoc = true
+			}
 			for _, k := range []string{"PHOTO_SAVE_FILE_INVALID", "PHOTO_INVALID_DIMENSIONS", "MEDIA_INVALID", "IMAGE_PROCESS_FAILED"} {
 				if strings.Contains(msg, k) {
 					asDoc = true
@@ -230,6 +239,7 @@ func (u *tgUploader) sendScreenshots(ctx context.Context, chatID int64, path str
 	if err := u.tg.UploadGroup(ctx, chatID, items); err != nil {
 		slog.Warn("screenshot album failed", "err", err)
 	}
+	u.lim.RecordUploadDone(chatID)
 }
 
 // SplitGroupKey returns the base name when path is one part of a split set.
@@ -332,12 +342,21 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 			return asDoc, err
 		}
 		err := u.tg.UploadGroup(ctx, chatID, items)
+		u.lim.RecordUploadDone(chatID)
 		if secs, ok := tg.IsFlood(err); ok {
 			u.lim.NotifyFloodWait(secs, chatID)
-			if e := pacing.Sleep(ctx, time.Duration(secs+2)*time.Second); e != nil {
+			waitDur := time.Duration(secs)*time.Second + 2*time.Second
+			if secs == 0 {
+				waitDur = 0
+			}
+			if e := pacing.Sleep(ctx, waitDur); e != nil {
 				return asDoc, e
 			}
+			if err := u.lim.AcquireUpload(ctx, chatID); err != nil {
+				return asDoc, err
+			}
 			err = u.tg.UploadGroup(ctx, chatID, items)
+			u.lim.RecordUploadDone(chatID)
 		}
 		if err != nil {
 			if errors.Is(err, tg.ErrAmbiguousUpload) {

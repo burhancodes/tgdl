@@ -15,12 +15,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
+
+var localDirMapWarnOnce sync.Once
 
 // BotAPI implements Client on top of github.com/go-telegram/bot. Point
 // TG_BOT_API_URL at a self-hosted `telegram-bot-api --local` server to lift
@@ -73,6 +76,26 @@ func (m *LocalDirMap) FileURL(localPath string) (string, bool) {
 	return "file:///" + strings.TrimPrefix(filepath.ToSlash(srvPath), "/"), true
 }
 
+// LocalPath translates a container file:/// URL back to a host path.
+func (m *LocalDirMap) LocalPath(fileURL string) (string, bool) {
+	if m == nil || m.HostPrefix == "" || m.ContainerPrefix == "" {
+		return "", false
+	}
+	raw := strings.TrimPrefix(fileURL, "file://")
+	srvPath := "/" + strings.TrimPrefix(raw, "/")
+	cleanSrv := filepath.Clean(filepath.FromSlash(srvPath))
+	cleanContainer := filepath.Clean(filepath.FromSlash(m.ContainerPrefix))
+
+	rel, err := filepath.Rel(cleanContainer, cleanSrv)
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", false
+	}
+	if rel == "." {
+		return filepath.Clean(filepath.FromSlash(m.HostPrefix)), true
+	}
+	return filepath.Join(filepath.FromSlash(m.HostPrefix), rel), true
+}
+
 func (a *BotAPI) SetLocalDirMap(hostPrefix, containerPrefix string) {
 	a.localDirMap = &LocalDirMap{
 		HostPrefix:      hostPrefix,
@@ -95,6 +118,70 @@ func (a *BotAPI) SetLocalDirMapRaw(raw string) error {
 		return fmt.Errorf("invalid TG_BOT_API_LOCAL_DIR_MAP %q: empty prefix", raw)
 	}
 	a.SetLocalDirMap(h, c)
+	return nil
+}
+
+// ProbeLocalDirMap verifies that the local telegram-bot-api server can access files
+// inside dataDir via the configured LocalDirMap. It creates a temporary probe file,
+// asks the server to resolve it, and cleans up the probe file.
+func (a *BotAPI) ProbeLocalDirMap(ctx context.Context, dataDir string) error {
+	if a == nil || a.localDirMap == nil || a.BaseURL == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	probePath := filepath.Join(dataDir, ".local_dir_probe")
+	if err := os.WriteFile(probePath, []byte("probe"), 0o644); err != nil {
+		return err
+	}
+	defer os.Remove(probePath)
+
+	fileURL, ok := a.localDirMap.FileURL(probePath)
+	if !ok {
+		return fmt.Errorf("probe file %s is not within LocalDirMap host prefix %s", probePath, a.localDirMap.HostPrefix)
+	}
+
+	baseURL := strings.TrimRight(a.BaseURL, "/")
+	reqURL := fmt.Sprintf("%s/bot%s/sendDocument", baseURL, a.Token)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("chat_id", "0")
+	_ = mw.WriteField("document", fileURL)
+	_ = mw.Close()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, reqURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	client := a.http
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("probe request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+
+	var apiResp struct {
+		OK          bool   `json:"ok"`
+		ErrorCode   int    `json:"error_code"`
+		Description string `json:"description"`
+	}
+	_ = json.Unmarshal(respBody, &apiResp)
+
+	desc := strings.ToLower(apiResp.Description)
+	if strings.Contains(desc, "wrong file") || strings.Contains(desc, "can't open") ||
+		strings.Contains(desc, "permission") || (strings.Contains(desc, "not found") && strings.Contains(desc, "file")) {
+		return fmt.Errorf("bot api server cannot read local file %s (%s): %s", probePath, fileURL, apiResp.Description)
+	}
 	return nil
 }
 
@@ -258,7 +345,19 @@ func (t *bodyTracker) fullySent() bool {
 	return t.total > 0 && t.read.Load() >= t.total
 }
 
+type groupMediaItem struct {
+	Type              string `json:"type"`
+	Media             string `json:"media"`
+	Caption           string `json:"caption,omitempty"`
+	ParseMode         string `json:"parse_mode,omitempty"`
+	SupportsStreaming bool   `json:"supports_streaming,omitempty"`
+}
+
 func (a *BotAPI) postMultipart(ctx context.Context, method string, fields map[string]string, files []filePart, out any) error {
+	return a.postMultipartInternal(ctx, method, fields, files, out, false)
+}
+
+func (a *BotAPI) postMultipartInternal(ctx context.Context, method string, fields map[string]string, files []filePart, out any, isRetry bool) error {
 	baseURL := a.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.telegram.org"
@@ -266,11 +365,36 @@ func (a *BotAPI) postMultipart(ctx context.Context, method string, fields map[st
 	baseURL = strings.TrimRight(baseURL, "/")
 	reqURL := fmt.Sprintf("%s/bot%s/%s", baseURL, a.Token, method)
 
-	var totalFileSize int64
+	var totalBytes int64
 	for _, f := range files {
-		totalFileSize += f.size
+		totalBytes += f.size
 	}
-	uploadTimeout := 15*time.Minute + time.Duration(totalFileSize/(512*1024))*time.Second
+	if a.localDirMap != nil {
+		for _, v := range fields {
+			if strings.HasPrefix(v, "file://") {
+				if lp, ok := a.localDirMap.LocalPath(v); ok {
+					if st, err := os.Stat(lp); err == nil {
+						totalBytes += st.Size()
+					}
+				}
+			}
+		}
+		if mediaJSON, ok := fields["media"]; ok && method == "sendMediaGroup" {
+			var mediaItems []groupMediaItem
+			if err := json.Unmarshal([]byte(mediaJSON), &mediaItems); err == nil {
+				for _, it := range mediaItems {
+					if strings.HasPrefix(it.Media, "file://") {
+						if lp, ok := a.localDirMap.LocalPath(it.Media); ok {
+							if st, err := os.Stat(lp); err == nil {
+								totalBytes += st.Size()
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	uploadTimeout := 15*time.Minute + time.Duration(totalBytes/(512*1024))*time.Second
 	uploadCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
@@ -384,6 +508,28 @@ func (a *BotAPI) postMultipart(ctx context.Context, method string, fields map[st
 	}
 
 	if !apiResp.OK {
+		if (apiResp.ErrorCode == http.StatusBadRequest || resp.StatusCode == http.StatusBadRequest ||
+			strings.Contains(strings.ToLower(apiResp.Description), "bad request")) && !isRetry {
+			desc := strings.ToLower(apiResp.Description)
+			if strings.Contains(desc, "file") || strings.Contains(desc, "not found") ||
+				strings.Contains(desc, "permission") || strings.Contains(desc, "wrong file") {
+				if fallbackFiles, fallbackFields, ok := a.convertFileURIsToMultipart(method, fields); ok {
+					localDirMapWarnOnce.Do(func() {
+						slog.Warn("local file:// upload failed with Bot API error; falling back to streaming multipart", "err", apiResp.Description)
+					})
+					defer func() {
+						for _, f := range fallbackFiles {
+							if c, ok := f.reader.(io.Closer); ok {
+								_ = c.Close()
+							}
+						}
+					}()
+					allFiles := append(append([]filePart(nil), files...), fallbackFiles...)
+					return a.postMultipartInternal(ctx, method, fallbackFields, allFiles, out, true)
+				}
+			}
+			return &BadRequestError{Message: apiResp.Description}
+		}
 		if apiResp.Parameters != nil && apiResp.Parameters.RetryAfter > 0 {
 			return &FloodError{Seconds: apiResp.Parameters.RetryAfter}
 		}
@@ -406,6 +552,98 @@ func (a *BotAPI) postMultipart(ctx context.Context, method string, fields map[st
 		}
 	}
 	return nil
+}
+
+func (a *BotAPI) convertFileURIsToMultipart(method string, fields map[string]string) ([]filePart, map[string]string, bool) {
+	if a.localDirMap == nil {
+		return nil, nil, false
+	}
+	var newFiles []filePart
+	newFields := make(map[string]string, len(fields))
+	for k, v := range fields {
+		newFields[k] = v
+	}
+	convertedAny := false
+
+	if method == "sendMediaGroup" {
+		if mediaJSON, ok := newFields["media"]; ok {
+			var mediaItems []groupMediaItem
+			if err := json.Unmarshal([]byte(mediaJSON), &mediaItems); err == nil {
+				for i := range mediaItems {
+					if strings.HasPrefix(mediaItems[i].Media, "file://") {
+						if lp, ok := a.localDirMap.LocalPath(mediaItems[i].Media); ok {
+							f, err := os.Open(lp)
+							if err == nil {
+								st, serr := f.Stat()
+								if serr == nil {
+									attachName := fmt.Sprintf("file%d", i)
+									mediaItems[i].Media = "attach://" + attachName
+									newFiles = append(newFiles, filePart{
+										fieldName: attachName,
+										fileName:  filepath.Base(lp),
+										reader:    f,
+										size:      st.Size(),
+									})
+									convertedAny = true
+								} else {
+									_ = f.Close()
+								}
+							}
+						}
+					}
+				}
+				if convertedAny {
+					b, err := json.Marshal(mediaItems)
+					if err == nil {
+						newFields["media"] = string(b)
+					}
+				}
+			}
+		}
+	} else {
+		for k, v := range fields {
+			if strings.HasPrefix(v, "file://") {
+				if lp, ok := a.localDirMap.LocalPath(v); ok {
+					f, err := os.Open(lp)
+					if err == nil {
+						st, serr := f.Stat()
+						if serr == nil {
+							convertedAny = true
+							if k == "thumbnail" {
+								newFields["thumbnail"] = "attach://thumb"
+								newFiles = append(newFiles, filePart{
+									fieldName: "thumb",
+									fileName:  filepath.Base(lp),
+									reader:    f,
+									size:      st.Size(),
+								})
+							} else {
+								delete(newFields, k)
+								newFiles = append(newFiles, filePart{
+									fieldName: k,
+									fileName:  filepath.Base(lp),
+									reader:    f,
+									size:      st.Size(),
+								})
+							}
+						} else {
+							_ = f.Close()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !convertedAny {
+		for _, f := range newFiles {
+			if c, ok := f.reader.(io.Closer); ok {
+				_ = c.Close()
+			}
+		}
+		return nil, nil, false
+	}
+	return newFiles, newFields, true
 }
 
 func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
@@ -467,10 +705,12 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 		fields["disable_content_type_detection"] = "true"
 	}
 
+	isLocalFile := false
 	if fileURL, ok := a.localDirMap.FileURL(u.Path); ok {
+		isLocalFile = true
 		fields[fieldName] = fileURL
 		if u.Progress != nil {
-			u.Progress(st.Size(), st.Size())
+			u.Progress(0, st.Size())
 		}
 	} else {
 		f, err := os.Open(u.Path)
@@ -510,7 +750,11 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 		}
 	}
 
-	return a.postMultipart(ctx, method, fields, files, nil)
+	err = a.postMultipart(ctx, method, fields, files, nil)
+	if err == nil && isLocalFile && u.Progress != nil {
+		u.Progress(st.Size(), st.Size())
+	}
+	return err
 }
 
 func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupItem) error {
@@ -524,14 +768,6 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 			_ = c.Close()
 		}
 	}()
-
-	type groupMediaItem struct {
-		Type              string `json:"type"`
-		Media             string `json:"media"`
-		Caption           string `json:"caption,omitempty"`
-		ParseMode         string `json:"parse_mode,omitempty"`
-		SupportsStreaming bool   `json:"supports_streaming,omitempty"`
-	}
 
 	media := make([]groupMediaItem, 0, len(items))
 	for i, it := range items {
@@ -633,8 +869,8 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 
 	inDataDir := IsInsideDir(info.FilePath, a.dataDir)
 	if filepath.IsAbs(info.FilePath) && inDataDir {
-		// Prefer os.Rename when source and dest are on the same filesystem.
-		if err := os.Rename(info.FilePath, dest); err == nil {
+		// Copy instead of rename so a second getFile of the same file_id succeeds.
+		if err := copyFile(info.FilePath, dest); err == nil {
 			if cb != nil {
 				cb(total, total)
 			}
@@ -709,12 +945,30 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 	if err := os.Rename(part, dest); err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(info.FilePath) && inDataDir {
-		if err := os.Remove(info.FilePath); err != nil && !os.IsNotExist(err) {
-			slog.Warn("failed to remove local Bot API source file", "path", info.FilePath, "err", err)
-		}
-	}
 	return dest, nil
+}
+
+func copyFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	part := dest + ".part"
+	out, err := os.Create(part)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(part)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(part)
+		return err
+	}
+	return os.Rename(part, dest)
 }
 
 func (a *BotAPI) SetCommands(ctx context.Context, cmds []Command) error {
