@@ -89,9 +89,10 @@ type Config struct {
 	MagnetioSecret      string
 	AriaMaxConcurrentDL int
 
-	OwnerID       int64
-	HasOwner      bool
-	AuthorizedIDs []int64
+	OwnerID          int64
+	HasOwner         bool
+	HasExplicitOwner bool
+	AuthorizedIDs    []int64
 
 	MaxJobsPerChat       int
 	MaxTotalDownloadsB   int64
@@ -212,14 +213,14 @@ func Load() (*Config, error) {
 
 	if raw, ok := os.LookupEnv("OWNER_ID"); ok && strings.TrimSpace(raw) != "" {
 		if id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && id != 0 {
-			c.OwnerID, c.HasOwner = id, true
+			c.OwnerID, c.HasOwner, c.HasExplicitOwner = id, true, true
 		}
 	}
 	if !c.HasOwner {
 		if len(c.AuthorizedIDs) > 0 {
-			c.OwnerID, c.HasOwner = c.AuthorizedIDs[0], true
+			c.OwnerID, c.HasOwner, c.HasExplicitOwner = c.AuthorizedIDs[0], true, false
 		} else {
-			c.OwnerID, c.HasOwner = 0, false
+			c.OwnerID, c.HasOwner, c.HasExplicitOwner = 0, false, false
 			slog.Warn("no owner configured: OWNER_ID is unset and AUTHORIZED_USER_IDS is empty; settings commands are disabled")
 		}
 	}

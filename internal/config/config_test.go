@@ -88,8 +88,8 @@ func TestOwnerResolution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if !cfg.HasOwner || cfg.OwnerID != 555 {
-			t.Errorf("got (%v, %d); want (true, 555)", cfg.HasOwner, cfg.OwnerID)
+		if !cfg.HasOwner || !cfg.HasExplicitOwner || cfg.OwnerID != 555 {
+			t.Errorf("got (%v, %v, %d); want (true, true, 555)", cfg.HasOwner, cfg.HasExplicitOwner, cfg.OwnerID)
 		}
 	})
 
@@ -100,8 +100,8 @@ func TestOwnerResolution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if !cfg.HasOwner || cfg.OwnerID != 100 {
-			t.Errorf("got (%v, %d); want (true, 100)", cfg.HasOwner, cfg.OwnerID)
+		if !cfg.HasOwner || cfg.HasExplicitOwner || cfg.OwnerID != 100 {
+			t.Errorf("got (%v, %v, %d); want (true, false, 100)", cfg.HasOwner, cfg.HasExplicitOwner, cfg.OwnerID)
 		}
 	})
 
@@ -112,8 +112,8 @@ func TestOwnerResolution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if cfg.HasOwner || cfg.OwnerID != 0 {
-			t.Errorf("got (%v, %d); want (false, 0)", cfg.HasOwner, cfg.OwnerID)
+		if cfg.HasOwner || cfg.HasExplicitOwner || cfg.OwnerID != 0 {
+			t.Errorf("got (%v, %v, %d); want (false, false, 0)", cfg.HasOwner, cfg.HasExplicitOwner, cfg.OwnerID)
 		}
 	})
 }

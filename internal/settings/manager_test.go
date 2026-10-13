@@ -86,6 +86,15 @@ func TestManagerLockoutProtection(t *testing.T) {
 	if _, err := mgr.Set(ctx, 12345, "AUTHORIZED_USER_IDS", "12345,9999", "test"); err != nil {
 		t.Errorf("unexpected error with owner included: %v", err)
 	}
+
+	explicitCfg := &config.Config{OwnerID: 12345, HasOwner: true, HasExplicitOwner: true, AuthorizedIDs: []int64{12345}}
+	explicitMgr, err := NewManager(explicitCfg, reg, store)
+	if err != nil {
+		t.Fatalf("NewManager explicit: %v", err)
+	}
+	if _, err := explicitMgr.Set(ctx, 12345, "AUTHORIZED_USER_IDS", "9999,8888", "test"); err != nil {
+		t.Errorf("unexpected error when setting AUTHORIZED_USER_IDS with explicit owner: %v", err)
+	}
 }
 
 func TestManagerResetAndUndo(t *testing.T) {

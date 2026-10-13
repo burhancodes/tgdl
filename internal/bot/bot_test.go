@@ -5,7 +5,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/burhanverse/tgdl/internal/auth"
+	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/tg"
+	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
@@ -171,5 +174,68 @@ func TestDefault_PinnedServiceMessageDeletion(t *testing.T) {
 	app.Default(context.Background(), nil, updateUserPin)
 	if len(tgMock.deleted) != 0 {
 		t.Fatalf("expected user's pinned service message NOT to be deleted, got: %+v", tgMock.deleted)
+	}
+}
+
+func TestAuthMiddleware_BypassServiceMessagesAndBot(t *testing.T) {
+	cfg := &config.Config{AuthorizedIDs: []int64{100}}
+	authz := auth.New(cfg)
+	botID := int64(7974384107)
+
+	called := false
+	next := func(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+		called = true
+	}
+
+	mw := authMiddleware(authz, botID)(next)
+	ctx := context.Background()
+
+	called = false
+	updPin := &models.Update{
+		Message: &models.Message{
+			Chat:          models.Chat{ID: 999},
+			From:          &models.User{ID: botID},
+			PinnedMessage: &models.MaybeInaccessibleMessage{},
+		},
+	}
+	mw(ctx, nil, updPin)
+	if !called {
+		t.Errorf("expected pinned service message from bot to pass through auth middleware")
+	}
+
+	called = false
+	updBotMsg := &models.Update{
+		Message: &models.Message{
+			Chat: models.Chat{ID: 999},
+			From: &models.User{ID: botID},
+		},
+	}
+	mw(ctx, nil, updBotMsg)
+	if !called {
+		t.Errorf("expected bot's own update to pass through auth middleware")
+	}
+
+	called = false
+	updAuthorized := &models.Update{
+		Message: &models.Message{
+			Chat: models.Chat{ID: 999},
+			From: &models.User{ID: 100},
+		},
+	}
+	mw(ctx, nil, updAuthorized)
+	if !called {
+		t.Errorf("expected authorized user to pass through auth middleware")
+	}
+
+	called = false
+	updUnauthorized := &models.Update{
+		Message: &models.Message{
+			Chat: models.Chat{ID: 999},
+			From: &models.User{ID: 200},
+		},
+	}
+	mw(ctx, nil, updUnauthorized)
+	if called {
+		t.Errorf("expected unauthorized user to be blocked by auth middleware")
 	}
 }

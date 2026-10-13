@@ -32,6 +32,7 @@ func TestTouchedFilesHaveNoComments(t *testing.T) {
 		"internal/auth/auth.go",
 		"internal/auth/auth_test.go",
 		"internal/bot/app.go",
+		"internal/bot/bot_test.go",
 		"internal/bot/help.go",
 		"internal/bot/settings.go",
 		"internal/bot/settings_test.go",

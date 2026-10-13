@@ -12,8 +12,14 @@ type Authorizer struct{ cfg *config.Config }
 func New(cfg *config.Config) *Authorizer { return &Authorizer{cfg: cfg} }
 
 func (a *Authorizer) Authorized(userID int64) bool {
+	if userID == 0 {
+		return false
+	}
 	a.cfg.RLock()
 	defer a.cfg.RUnlock()
+	if a.cfg.HasOwner && a.cfg.OwnerID != 0 && userID == a.cfg.OwnerID {
+		return true
+	}
 	if len(a.cfg.AuthorizedIDs) == 0 {
 		return true
 	}

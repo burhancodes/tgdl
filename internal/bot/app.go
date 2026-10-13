@@ -71,10 +71,8 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 		semLimit = int64(d.Cfg.MaxConcurrentDL)
 	}
 	var botID int64
-	if d.Cfg != nil && d.Cfg.BotToken != "" {
-		if parts := strings.SplitN(d.Cfg.BotToken, ":", 2); len(parts) > 0 {
-			botID, _ = strconv.ParseInt(parts[0], 10, 64)
-		}
+	if d.Cfg != nil {
+		botID = parseBotID(d.Cfg.BotToken)
 	}
 	var setUI *SettingsUI
 	if d.SettingsMgr != nil {
@@ -127,9 +125,21 @@ func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFi
 	}()
 }
 
+func parseBotID(token string) int64 {
+	if parts := strings.SplitN(token, ":", 2); len(parts) > 0 {
+		id, _ := strconv.ParseInt(parts[0], 10, 64)
+		return id
+	}
+	return 0
+}
+
 func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.HandlerFunc) (*tgbot.Bot, *tg.BotAPI, error) {
+	var botID int64
+	if cfg != nil {
+		botID = parseBotID(cfg.BotToken)
+	}
 	opts := []tgbot.Option{
-		tgbot.WithMiddlewares(authMiddleware(authz)),
+		tgbot.WithMiddlewares(authMiddleware(authz, botID)),
 		tgbot.WithAllowedUpdates(tgbot.AllowedUpdates{"message", "callback_query"}),
 		tgbot.WithErrorsHandler(func(err error) { slog.Warn("telegram client error", "err", err) }),
 	}
@@ -159,9 +169,19 @@ func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.
 	return b, api, nil
 }
 
-func authMiddleware(a *auth.Authorizer) tgbot.Middleware {
+func authMiddleware(a *auth.Authorizer, botID int64) tgbot.Middleware {
 	return func(next tgbot.HandlerFunc) tgbot.HandlerFunc {
 		return func(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+			if u.Message != nil {
+				if u.Message.PinnedMessage != nil || u.Message.NewChatMembers != nil || u.Message.LeftChatMember != nil {
+					next(ctx, b, u)
+					return
+				}
+				if botID != 0 && u.Message.From != nil && u.Message.From.ID == botID {
+					next(ctx, b, u)
+					return
+				}
+			}
 			var uid int64
 			switch {
 			case u.Message != nil && u.Message.From != nil:
@@ -169,16 +189,19 @@ func authMiddleware(a *auth.Authorizer) tgbot.Middleware {
 			case u.CallbackQuery != nil:
 				uid = u.CallbackQuery.From.ID
 			}
+			if uid == 0 {
+				return
+			}
 			if a.Authorized(uid) {
 				next(ctx, b, u)
 				return
 			}
 			slog.Warn("unauthorized access attempt", "user", uid)
 			switch {
-			case u.CallbackQuery != nil:
+			case u.CallbackQuery != nil && b != nil:
 				_, _ = b.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{
 					CallbackQueryID: u.CallbackQuery.ID, Text: "You are not authorized to use this bot.", ShowAlert: true})
-			case u.Message != nil:
+			case u.Message != nil && b != nil:
 				_, _ = b.SendMessage(ctx, &tgbot.SendMessageParams{ChatID: u.Message.Chat.ID,
 					Text: "You are not authorized to use this bot."})
 			}

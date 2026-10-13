@@ -167,9 +167,12 @@ func (m *Manager) Set(ctx context.Context, userID int64, key, val, source string
 		if err != nil {
 			return nil, err
 		}
-		if m.cfg.HasOwner && m.cfg.OwnerID != 0 {
+		if m.cfg.HasOwner && !m.cfg.HasExplicitOwner && m.cfg.OwnerID != 0 {
 			if len(proposed) > 0 && !slices.Contains(proposed, m.cfg.OwnerID) {
 				return nil, fmt.Errorf("cannot remove owner (ID %d) from AUTHORIZED_USER_IDS: lock-out prevented", m.cfg.OwnerID)
+			}
+			if len(proposed) == 0 {
+				return nil, errors.New("cannot clear AUTHORIZED_USER_IDS: OWNER_ID is not configured separately")
 			}
 		}
 	}
@@ -254,7 +257,7 @@ func (m *Manager) Reset(ctx context.Context, userID int64, key, source string) (
 
 	if cleanK == "AUTHORIZED_USER_IDS" {
 		proposed, _ := ParseIDList(newVal)
-		if m.cfg.HasOwner && m.cfg.OwnerID != 0 && len(proposed) > 0 {
+		if m.cfg.HasOwner && !m.cfg.HasExplicitOwner && m.cfg.OwnerID != 0 && len(proposed) > 0 {
 			if !slices.Contains(proposed, m.cfg.OwnerID) {
 				m.data.Values[cleanK] = oldVal
 				return nil, fmt.Errorf("resetting AUTHORIZED_USER_IDS would lock out owner (ID %d)", m.cfg.OwnerID)
@@ -465,7 +468,7 @@ func (m *Manager) Import(raw []byte) ([]Diff, func(ctx context.Context, userID i
 			if err != nil {
 				return nil, nil, err
 			}
-			if m.cfg.HasOwner && m.cfg.OwnerID != 0 && len(proposed) > 0 {
+			if m.cfg.HasOwner && !m.cfg.HasExplicitOwner && m.cfg.OwnerID != 0 && len(proposed) > 0 {
 				if !slices.Contains(proposed, m.cfg.OwnerID) {
 					return nil, nil, fmt.Errorf("imported AUTHORIZED_USER_IDS locks out owner (%d)", m.cfg.OwnerID)
 				}

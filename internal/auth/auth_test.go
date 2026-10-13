@@ -27,6 +27,37 @@ func TestAuthorizedRestricted(t *testing.T) {
 	if a.Authorized(300) {
 		t.Errorf("did not expect 300 to be authorized")
 	}
+	if a.Authorized(0) {
+		t.Errorf("user 0 should not be authorized")
+	}
+}
+
+func TestAuthorizedOwnerAlwaysAuthorized(t *testing.T) {
+	cfg := &config.Config{OwnerID: 999, HasOwner: true, AuthorizedIDs: []int64{100, 200}}
+	a := New(cfg)
+	if !a.Authorized(999) {
+		t.Errorf("expected owner (999) to be authorized even if not in AuthorizedIDs")
+	}
+	if !a.Authorized(100) {
+		t.Errorf("expected 100 to be authorized")
+	}
+	if a.Authorized(300) {
+		t.Errorf("did not expect 300 to be authorized")
+	}
+	if a.Authorized(0) {
+		t.Errorf("user 0 should not be authorized")
+	}
+}
+
+func TestAuthorizedOwnerEmptyAuthorizedIDs(t *testing.T) {
+	cfg := &config.Config{OwnerID: 999, HasOwner: true, AuthorizedIDs: nil}
+	a := New(cfg)
+	if !a.Authorized(999) {
+		t.Errorf("expected owner (999) to be authorized")
+	}
+	if a.Authorized(0) {
+		t.Errorf("user 0 should not be authorized")
+	}
 }
 
 func TestIsOwner(t *testing.T) {
