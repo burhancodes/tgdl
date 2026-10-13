@@ -90,3 +90,11 @@ docker compose logs -f
 ./tgdl.sh stop       # Gracefully shut down containers
 ./tgdl.sh clean      # Prune dangling images and build caches
 ```
+
+### Container Permissions & Host Ownership
+`tgdl` runs as root inside its container with dropped capabilities (`cap_drop: [ALL]`, `cap_add: [DAC_OVERRIDE, FOWNER, CHOWN]`, `no-new-privileges:true`). This is necessary because the local `telegram-bot-api` server writes downloaded files into its private data directory (`/var/lib/telegram-bot-api/<token>`) with restricted permissions (`0750` / `0640`, uid 101). Running with `DAC_OVERRIDE` allows `tgdl` to read and delete those files across volumes without requiring fragile host uid/gid mapping.
+
+**Host side effect:** Files created by the bot inside `./data`, `./auth`, and `./logs` will be owned by root on the host. If you need to edit or inspect these files by hand on the host, adjust ownership using:
+```bash
+sudo chown -R $USER ./data ./auth ./logs
+```

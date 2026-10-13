@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/netguard"
 )
 
@@ -464,6 +465,7 @@ func remux(ctx context.Context, in, dest, format string) (string, error) {
 	if err := os.Rename(part, dest); err != nil {
 		return "", err
 	}
+	_ = fsutil.MakeWorldReadable(dest)
 	return dest, nil
 }
 

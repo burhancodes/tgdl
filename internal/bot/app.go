@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -165,8 +168,53 @@ func NewClient(cfg *config.Config, authz *auth.Authorizer, defaultHandler tgbot.
 	}
 	if cfg.BotAPIDataDir != "" {
 		api.SetDataDir(cfg.BotAPIDataDir)
+		checkBotAPIPermissions(cfg.BotAPIDataDir, cfg.BotToken)
 	}
 	return b, api, nil
+}
+
+var botAPISelfCheckOnce sync.Once
+
+func checkBotAPIPermissions(dataDir, token string) {
+	botAPISelfCheckOnce.Do(func() {
+		uid := os.Getuid()
+		if dataDir == "" {
+			return
+		}
+		dataDirWritable := false
+		if probe, err := os.CreateTemp(dataDir, ".tgdl_probe_*"); err == nil {
+			_ = probe.Close()
+			_ = os.Remove(probe.Name())
+			dataDirWritable = true
+		} else {
+			slog.Warn("bot api data directory is not writable", "uid", uid, "dir", dataDir, "err", err)
+		}
+
+		tokenDir := filepath.Join(dataDir, token)
+		maskedDir := filepath.Join(dataDir, "<token>")
+		st, err := os.Stat(tokenDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				slog.Info("startup permissions check", "uid", uid, "botapi_data_dir", dataDir, "botapi_data_dir_writable", dataDirWritable, "token_dir", "not created yet")
+				return
+			}
+			slog.Warn("bot api token directory cannot be read", "uid", uid, "dir", maskedDir, "err", err)
+			return
+		}
+		if !st.IsDir() {
+			slog.Warn("bot api token directory is not a directory", "uid", uid, "dir", maskedDir)
+			return
+		}
+		tokenDirWritable := false
+		if probe, err := os.CreateTemp(tokenDir, ".tgdl_probe_*"); err == nil {
+			_ = probe.Close()
+			_ = os.Remove(probe.Name())
+			tokenDirWritable = true
+		} else {
+			slog.Warn("bot api token directory is not writable", "uid", uid, "dir", maskedDir, "err", err)
+		}
+		slog.Info("startup permissions check", "uid", uid, "botapi_data_dir", dataDir, "botapi_data_dir_writable", dataDirWritable, "token_dir_writable", tokenDirWritable)
+	})
 }
 
 func authMiddleware(a *auth.Authorizer, botID int64) tgbot.Middleware {

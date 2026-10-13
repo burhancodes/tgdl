@@ -16,11 +16,9 @@ RUN ( [ -f /etc/apt/sources.list.d/debian.sources ] && sed -i 's/Components: mai
     && rm -rf /var/lib/apt/lists/*
 RUN pip install gallery-dl cyberdrop-dl-patched
 
-RUN useradd -m -u 1000 botuser
 WORKDIR /app
 COPY --from=build /out/tgdl /usr/local/bin/tgdl
 COPY scraper ./scraper
-RUN cd scraper && npm ci --omit=dev && mkdir -p /app/data /app/auth /app/logs && chown -R botuser:botuser /app
-USER botuser
+RUN cd scraper && npm ci --omit=dev && mkdir -p /app/data /app/auth /app/logs
 VOLUME ["/app/data", "/app/auth", "/app/logs"]
 ENTRYPOINT ["tgdl"]

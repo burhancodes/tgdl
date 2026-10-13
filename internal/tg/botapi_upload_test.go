@@ -757,7 +757,6 @@ func TestDownload_SameFileTwice_LocalBotAPI(t *testing.T) {
 
 	fRef := FileRef{FileID: "file_abc", Name: "video123.mp4", Size: int64(len(fileContent))}
 
-	// First download
 	p1, err := api.Download(context.Background(), fRef, destDir1, nil)
 	if err != nil {
 		t.Fatalf("first Download failed: %v", err)
@@ -767,12 +766,14 @@ func TestDownload_SameFileTwice_LocalBotAPI(t *testing.T) {
 		t.Fatalf("downloaded file 1 invalid: %v", err)
 	}
 
-	// Verify source file still exists in dataDir!
-	if _, err := os.Stat(srcFilePath); err != nil {
-		t.Fatalf("source file in dataDir was removed after first download: %v", err)
+	if _, err := os.Stat(srcFilePath); !os.IsNotExist(err) {
+		t.Fatalf("expected source file to be removed after download, got err: %v", err)
 	}
 
-	// Second download of the same file_id
+	if err := os.WriteFile(srcFilePath, fileContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	p2, err := api.Download(context.Background(), fRef, destDir2, nil)
 	if err != nil {
 		t.Fatalf("second Download failed: %v", err)

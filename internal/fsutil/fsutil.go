@@ -450,3 +450,21 @@ func EnsureExtension(path string) string {
 	slog.Info("renamed file with generic extension", "from", base, "to", filepath.Base(target))
 	return target
 }
+
+func MakeWorldReadable(path string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return os.Chmod(path, 0o755)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		_ = os.Chmod(dir, 0o755)
+	}
+	return nil
+}

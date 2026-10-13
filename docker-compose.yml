@@ -48,9 +48,16 @@ services:
     image: ${BOT_IMAGE:-ghcr.io/burhancodes/tgdl/tgdl-bot:latest}
     build: .
     restart: unless-stopped
-    user: "${UID:-1000}:${GID:-1000}"
-    mem_limit: ${TGDL_MEM:-3g}
-    memswap_limit: ${TGDL_MEM:-3g}
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - FOWNER
+      - CHOWN
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: ${TGDL_MEM:-1g}
+    memswap_limit: ${TGDL_MEM:-1g}
     cpus: ${TGDL_CPUS:-2}
     pids_limit: 1024
     oom_score_adj: 500

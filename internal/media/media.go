@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/burhanverse/tgdl/internal/archive"
+	"github.com/burhanverse/tgdl/internal/fsutil"
 )
 
 var (
@@ -213,7 +214,11 @@ func ConvertImageToPNG(ctx context.Context, in, out string) bool {
 		return false
 	}
 	st, err := os.Stat(out)
-	return err == nil && st.Size() > 0
+	if err == nil && st.Size() > 0 {
+		_ = fsutil.MakeWorldReadable(out)
+		return true
+	}
+	return false
 }
 
 var TempDir = ""
@@ -234,7 +239,7 @@ func tempJPG(stem string) (string, error) {
 	}
 	name := f.Name()
 	_ = f.Close()
-	_ = os.Chmod(name, 0o644)
+	_ = fsutil.MakeWorldReadable(name)
 	return name, nil
 }
 
@@ -349,6 +354,7 @@ func Screenshots(ctx context.Context, path string, duration int) []string {
 			continue
 		}
 		fails = 0
+		_ = fsutil.MakeWorldReadable(out)
 		shots = append(shots, out)
 	}
 	return shots
@@ -365,7 +371,7 @@ func ConvertVideoToMKV(ctx context.Context, in, out string) bool {
 	}
 	st, err := os.Stat(out)
 	if err == nil && st.Size() > 0 {
-		_ = os.Chmod(out, 0o644)
+		_ = fsutil.MakeWorldReadable(out)
 		return true
 	}
 	return false
@@ -383,7 +389,7 @@ func ConvertAudioToMP3(ctx context.Context, in, out string) bool {
 	}
 	st, err := os.Stat(out)
 	if err == nil && st.Size() > 0 {
-		_ = os.Chmod(out, 0o644)
+		_ = fsutil.MakeWorldReadable(out)
 		return true
 	}
 	return false

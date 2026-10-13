@@ -862,6 +862,122 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 
 func (a *BotAPI) SetDataDir(dir string) { a.dataDir = dir }
 
+func (a *BotAPI) DataDir() string { return a.dataDir }
+
+var knownMediaDirs = []string{
+	"documents",
+	"videos",
+	"photos",
+	"animations",
+	"audio",
+	"voice",
+	"video_notes",
+	"stickers",
+	"music",
+	"thumbnails",
+	"temp",
+}
+
+func MaskToken(text, token string) string {
+	if token == "" {
+		return text
+	}
+	text = strings.ReplaceAll(text, "/"+token+"/", "/***/")
+	if strings.Contains(text, token) {
+		text = strings.ReplaceAll(text, token, "***")
+	}
+	return text
+}
+
+func ExtractRelativeFilePath(rawPath, token string) string {
+	rawPath = filepath.ToSlash(rawPath)
+	if token != "" {
+		tokenSlash := "/" + token + "/"
+		if idx := strings.Index(rawPath, tokenSlash); idx != -1 {
+			return strings.TrimPrefix(rawPath[idx+len(tokenSlash):], "/")
+		}
+		if strings.HasPrefix(rawPath, token+"/") {
+			return strings.TrimPrefix(rawPath[len(token+"/"):], "/")
+		}
+	}
+	parts := strings.Split(rawPath, "/")
+	for i, part := range parts {
+		for _, k := range knownMediaDirs {
+			if strings.EqualFold(part, k) {
+				return strings.Join(parts[i:], "/")
+			}
+		}
+	}
+	return strings.TrimPrefix(filepath.Clean(rawPath), "/")
+}
+
+func (a *BotAPI) resolveLocalFile(rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", os.ErrNotExist
+	}
+	var candidates []string
+	if filepath.IsAbs(rawPath) {
+		candidates = append(candidates, filepath.Clean(rawPath))
+	}
+	if a.localDirMap != nil {
+		if p, ok := a.localDirMap.LocalPath(rawPath); ok {
+			candidates = append(candidates, filepath.Clean(p))
+		}
+	}
+	dataDir := a.dataDir
+	if dataDir == "" {
+		dataDir = os.Getenv("TG_BOT_API_DATA_DIR")
+	}
+	if dataDir != "" {
+		rel := ExtractRelativeFilePath(rawPath, a.Token)
+		if a.Token != "" {
+			candidates = append(candidates, filepath.Join(dataDir, a.Token, rel))
+		}
+		candidates = append(candidates, filepath.Join(dataDir, rel))
+
+		slashPath := filepath.ToSlash(rawPath)
+		if prefix := "/var/lib/telegram-bot-api/"; strings.HasPrefix(slashPath, prefix) {
+			afterPrefix := strings.TrimPrefix(slashPath, prefix)
+			candidates = append(candidates, filepath.Join(dataDir, filepath.FromSlash(afterPrefix)))
+		}
+	}
+
+	seen := make(map[string]bool)
+	var permErr error
+	var permPath string
+
+	for _, cand := range candidates {
+		cand = filepath.Clean(cand)
+		if seen[cand] {
+			continue
+		}
+		seen[cand] = true
+
+		st, err := os.Stat(cand)
+		if err == nil {
+			if !st.IsDir() {
+				return cand, nil
+			}
+		} else if os.IsPermission(err) {
+			if permErr == nil {
+				permErr = err
+				permPath = cand
+			}
+		}
+	}
+
+	if permErr != nil {
+		return "", fmt.Errorf("cannot read %s: %w", permPath, permErr)
+	}
+	return "", os.ErrNotExist
+}
+
+func resolveLocalFile(rawPath string) (string, bool) {
+	api := &BotAPI{}
+	p, err := api.resolveLocalFile(rawPath)
+	return p, err == nil
+}
+
 func IsInsideDir(path, dir string) bool {
 	if dir == "" || path == "" || !filepath.IsAbs(path) {
 		return false
@@ -888,49 +1004,106 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 		name = filepath.Base(info.FilePath)
 	}
 	dest := filepath.Join(destDir, filepath.Base(name))
+	part := dest + ".part"
 	total := f.Size
 	if total == 0 {
 		total = info.FileSize
 	}
 
-	inDataDir := IsInsideDir(info.FilePath, a.dataDir)
-	if filepath.IsAbs(info.FilePath) && inDataDir {
-
-		if err := copyFile(info.FilePath, dest); err == nil {
-			if cb != nil {
-				cb(total, total)
-			}
-			return dest, nil
-		}
-	}
-
-	var src io.ReadCloser
 	if filepath.IsAbs(info.FilePath) {
-		if s, err := os.Open(info.FilePath); err == nil {
-			src = s
+		resolvedPath, statErr := a.resolveLocalFile(info.FilePath)
+		if statErr == nil {
+			if testFile, openErr := os.Open(resolvedPath); openErr != nil {
+				statErr = openErr
+			} else {
+				_ = testFile.Close()
+			}
 		}
-	}
-	if src == nil {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.B.FileDownloadLink(info), nil)
+		if statErr == nil {
+			_ = os.Remove(part)
+			_ = os.Remove(dest)
+			var copied bool
+			if err := os.Link(resolvedPath, dest); err == nil {
+				copied = true
+			} else {
+				if err := copyFileToDest(ctx, resolvedPath, part, dest, total, cb); err == nil {
+					copied = true
+				}
+			}
+			if copied {
+				st, serr := os.Stat(dest)
+				if serr != nil || (info.FileSize > 0 && st.Size() != info.FileSize) {
+					_ = os.Remove(dest)
+					_ = os.Remove(part)
+					var gotSize int64
+					if serr == nil {
+						gotSize = st.Size()
+					}
+					return "", fmt.Errorf("telegram file download: size mismatch: expected %d bytes, got %d", info.FileSize, gotSize)
+				}
+				if cb != nil {
+					cb(st.Size(), st.Size())
+				}
+				if err := os.Remove(resolvedPath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to delete bot api source file", "path", MaskToken(resolvedPath, a.Token), "err", err, "hint", "tgdl should run as root with DAC_OVERRIDE or have write permissions")
+				}
+				return dest, nil
+			}
+		}
+
+		slog.Warn("telegram file download cannot read local file", "path", MaskToken(info.FilePath, a.Token), "err", statErr)
+
+		relPath := ExtractRelativeFilePath(info.FilePath, a.Token)
+		fallbackURL := fmt.Sprintf("%s/file/bot%s/%s", strings.TrimRight(a.BaseURL, "/"), a.Token, relPath)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fallbackURL, nil)
 		if err != nil {
 			return "", err
 		}
 		resp, err := a.http.Do(req)
 		if err != nil {
-			return "", err
+			masked := MaskToken(info.FilePath, a.Token)
+			if statErr != nil && (os.IsPermission(statErr) || strings.Contains(statErr.Error(), "permission denied")) {
+				return "", fmt.Errorf("telegram file download: cannot read %s (permission denied); HTTP fallback error: %w", masked, err)
+			}
+			return "", fmt.Errorf("telegram file download: file not found on the shared volume: %s; HTTP fallback error: %w", masked, err)
+		}
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
+			resp.Body.Close()
+			masked := MaskToken(info.FilePath, a.Token)
+			if statErr != nil && (os.IsPermission(statErr) || strings.Contains(statErr.Error(), "permission denied")) {
+				return "", fmt.Errorf("telegram file download: cannot read %s (permission denied); HTTP fallback returned %d", masked, resp.StatusCode)
+			}
+			return "", fmt.Errorf("telegram file download: file not found on the shared volume: %s; HTTP fallback returned %d", masked, resp.StatusCode)
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
 			return "", fmt.Errorf("telegram file download: HTTP %d", resp.StatusCode)
 		}
-		if total == 0 {
-			total = resp.ContentLength
-		}
-		src = resp.Body
+		return a.streamHTTPResponse(ctx, resp, dest, part, info.FileSize, total, cb)
 	}
-	defer src.Close()
 
-	part := dest + ".part"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.B.FileDownloadLink(info), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return "", fmt.Errorf("telegram file download: HTTP %d", resp.StatusCode)
+	}
+	return a.streamHTTPResponse(ctx, resp, dest, part, info.FileSize, total, cb)
+}
+
+func (a *BotAPI) streamHTTPResponse(ctx context.Context, resp *http.Response, dest, part string, expectedSize, total int64, cb ProgressFunc) (string, error) {
+	defer resp.Body.Close()
+	if total == 0 {
+		total = resp.ContentLength
+	}
+	_ = os.Remove(part)
+	_ = os.Remove(dest)
 	out, err := os.Create(part)
 	if err != nil {
 		return "", err
@@ -938,7 +1111,7 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 	buf := make([]byte, 1<<20)
 	var done int64
 	for {
-		n, rerr := src.Read(buf)
+		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				_ = out.Close()
@@ -968,27 +1141,59 @@ func (a *BotAPI) Download(ctx context.Context, f FileRef, destDir string, cb Pro
 		_ = os.Remove(part)
 		return "", err
 	}
+	if expectedSize == 0 && total > 0 {
+		expectedSize = total
+	}
+	if expectedSize > 0 && done != expectedSize {
+		_ = os.Remove(part)
+		return "", fmt.Errorf("telegram file download: size mismatch: expected %d bytes, got %d", expectedSize, done)
+	}
 	if err := os.Rename(part, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
 }
 
-func copyFile(src, dest string) error {
+func copyFileToDest(ctx context.Context, src, part, dest string, total int64, cb ProgressFunc) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	part := dest + ".part"
+	_ = os.Remove(part)
+	_ = os.Remove(dest)
 	out, err := os.Create(part)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		_ = os.Remove(part)
-		return err
+	buf := make([]byte, 1<<20)
+	var done int64
+	for {
+		n, rerr := in.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				_ = out.Close()
+				_ = os.Remove(part)
+				return werr
+			}
+			done += int64(n)
+			if cb != nil {
+				cb(done, total)
+			}
+		}
+		if ctx.Err() != nil {
+			_ = out.Close()
+			_ = os.Remove(part)
+			return ctx.Err()
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			_ = out.Close()
+			_ = os.Remove(part)
+			return rerr
+		}
 	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(part)
