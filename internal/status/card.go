@@ -42,6 +42,13 @@ type Snapshot struct {
 	Archiving   bool
 	ArchiveFmt  string
 
+	IsRename     bool
+	RenameScheme string
+	RenameCurOld string
+	RenameCurNew string
+	RenameDone   int
+	RenameTotal  int
+
 	TotalFiles   int
 	Sent         int
 	Skipped      int
@@ -119,6 +126,15 @@ func Job(s Snapshot) string {
 		b.WriteString("<b>Archiver</b>\n<blockquote>")
 		kv(&b, "Format", Code(strings.ToUpper(s.ArchiveFmt)))
 		kv(&b, "State", Code("["+Marquee()+"]"))
+		b.WriteString("</blockquote>\n")
+	}
+	if s.IsRename {
+		b.WriteString("<b>Rename</b>\n<blockquote>")
+		kv(&b, "Scheme", Code(Short(s.RenameScheme, 50)))
+		kv(&b, "Progress", Code(fmt.Sprintf("%d / %d", s.RenameDone, s.RenameTotal)))
+		if s.RenameCurOld != "" && s.RenameCurNew != "" {
+			kv(&b, "Current", Code(Short(s.RenameCurOld, 30))+" → "+Code(Short(s.RenameCurNew, 30)))
+		}
 		b.WriteString("</blockquote>\n")
 	}
 

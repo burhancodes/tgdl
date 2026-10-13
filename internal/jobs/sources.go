@@ -5,13 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/gdrive"
 	"github.com/burhanverse/tgdl/internal/mega"
+	"github.com/burhanverse/tgdl/internal/pacing"
+	"github.com/burhanverse/tgdl/internal/rename"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
@@ -68,10 +73,165 @@ func listAll(dir string) []string {
 
 func DefaultSources(d *Deps) []Source {
 	return []Source{
-		&unzipSource{d}, &driveSource{d}, &megaSource{d}, &gofileSource{d},
+		&unzipSource{d}, &renameSource{d}, &driveSource{d}, &megaSource{d}, &gofileSource{d},
 		&ariaSource{d}, &mirrorTGSource{d}, &mirrorSource{d},
 		&cyberdropSource{d}, &directSource{d}, &galleryDLSource{d},
 	}
+}
+
+type renameSource struct{ d *Deps }
+
+func (renameSource) Name() string { return "rename" }
+
+func (renameSource) Match(r *Request) bool {
+	return strings.HasPrefix(r.URL, "rename:")
+}
+
+type renamePlanEntry struct {
+	FileID  string `json:"file_id"`
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
+func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
+	files := r.Args.RenameFiles
+	if len(files) == 0 && r.Args.TGFile != nil {
+		files = []dl.TGFile{*r.Args.TGFile}
+	}
+	if len(files) == 0 {
+		return fail("no files to rename")
+	}
+
+	schemeStr := r.Args.RenameScheme
+	if p, ok := rename.LookupPreset(schemeStr); ok {
+		schemeStr = p
+	}
+	if schemeStr == "" {
+		schemeStr = "{name}.{ext}"
+	}
+
+	planMap := make(map[string]string)
+	if stored, err := s.d.Store.GetRenamePlan(ctx, r.Job.ID); err == nil && stored != "" {
+		var entries []renamePlanEntry
+		if json.Unmarshal([]byte(stored), &entries) == nil {
+			for _, e := range entries {
+				planMap[e.FileID] = e.NewName
+			}
+		}
+	}
+
+	if len(planMap) == 0 {
+		parsed, err := rename.Parse(schemeStr)
+		if err != nil {
+			return fail("parse scheme: %v", err)
+		}
+		var inputs []rename.Input
+		for _, f := range files {
+			inputs = append(inputs, rename.Input{
+				OriginalName: f.Name,
+				Size:         f.Size,
+			})
+		}
+		opts := rename.Options{}
+		if r.Args.RenameOptions != nil {
+			opts = *r.Args.RenameOptions
+		}
+		plan, err := parsed.Plan(inputs, opts)
+		if err != nil {
+			return fail("rename plan: %v", err)
+		}
+		var entries []renamePlanEntry
+		for i, pe := range plan.Entries {
+			if i < len(files) {
+				name := pe.NewName
+				if name == "" {
+					name = files[i].Name
+				}
+				entries = append(entries, renamePlanEntry{
+					FileID:  files[i].FileID,
+					OldName: files[i].Name,
+					NewName: name,
+				})
+				planMap[files[i].FileID] = name
+			}
+		}
+		if b, err := json.Marshal(entries); err == nil {
+			_ = s.d.Store.SaveRenamePlan(ctx, r.Job.ID, string(b))
+		}
+	}
+
+	r.St.setRenameInfo(schemeStr, len(files))
+
+	uploaded, _ := s.d.Store.UploadedFilenames(ctx, r.Job.ID)
+	for i, f := range files {
+		if ctx.Err() != nil {
+			return fail("cancelled")
+		}
+		targetName := planMap[f.FileID]
+		if targetName == "" {
+			targetName = f.Name
+		}
+		if _, ok := uploaded[targetName]; ok {
+			r.St.setRenameProgress(f.Name, targetName, i+1)
+			continue
+		}
+		if _, ok := uploaded[f.Name]; ok {
+			r.St.setRenameProgress(f.Name, targetName, i+1)
+			continue
+		}
+
+		if free, err := fsutil.FreeDiskSpace(s.d.Cfg.DownloadsDir()); err == nil {
+			if int64(free) < f.Size+s.d.Cfg.MinFreeDiskBytes {
+				r.St.addSkip(f.Name, "insufficient disk space")
+				continue
+			}
+		}
+
+		for {
+			if ctx.Err() != nil {
+				return fail("cancelled")
+			}
+			existing := fsutil.ListUploadableWithInfo(r.Dest)
+			var pendingCount int
+			var totalExisting int64
+			for _, fi := range existing {
+				rel, _ := filepath.Rel(r.Dest, fi.Path)
+				if r.St.isPending(rel) {
+					pendingCount++
+					totalExisting += fi.Size
+				}
+			}
+			if s.d.Cfg.HasMaxTotalDownloads && totalExisting+f.Size > s.d.Cfg.MaxTotalDownloadsB {
+				if err := pacing.Sleep(ctx, 500*time.Millisecond); err != nil {
+					return fail("cancelled")
+				}
+				continue
+			}
+			if pendingCount >= 1 {
+				if err := pacing.Sleep(ctx, 500*time.Millisecond); err != nil {
+					return fail("cancelled")
+				}
+				continue
+			}
+			break
+		}
+
+		r.St.setRenameProgress(f.Name, targetName, i+1)
+		dlPath, err := downloadTG(ctx, s.d, r.St, &f, r.Dest)
+		if err != nil {
+			slog.Warn("rename download failed", "file", f.Name, "err", err)
+			r.St.addSkip(f.Name, err.Error())
+			continue
+		}
+		destPath := filepath.Join(r.Dest, targetName)
+		if dlPath != destPath {
+			if err := os.Rename(dlPath, destPath); err != nil {
+				slog.Warn("rename os.Rename failed", "from", dlPath, "to", destPath, "err", err)
+			}
+		}
+	}
+
+	return dl.Result{OK: true, Files: listAll(r.Dest)}
 }
 
 func downloadTG(ctx context.Context, d *Deps, st *State, f *dl.TGFile, dest string) (string, error) {

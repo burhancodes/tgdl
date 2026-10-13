@@ -30,6 +30,15 @@ var helpPages = map[string]string{
 	"cookies": "<b>Cookies</b>\n" +
 		"• <code>/cookies</code> — reply to cookies.txt to save it (used by gallery-dl and cyberdrop-dl)\n" +
 		"• <code>/cookies delete</code> — delete saved cookies",
+	"rename": "<b>File Renaming</b>\n" +
+		"Telegram cannot rename files in place, so files are downloaded, renamed, and re-sent.\n" +
+		"• Single file: reply to a file or send with caption:\n" +
+		"  <code>/rename &lt;scheme&gt; [options]</code>\n" +
+		"• Batch mode:\n" +
+		"  <code>/rename batch &lt;scheme&gt; [options]</code>\n" +
+		"• Options: <code>--start N</code>, <code>--step N</code>, <code>--sort name|time|size|sent</code>, <code>--on-conflict suffix|skip|error</code>, <code>--doc</code>\n" +
+		"• Schemes: <code>{n:3} - {name}.{ext}</code>, <code>{name|slug}.{ext}</code>, <code>{date:2006-01-02}_{name}.{ext}</code>\n" +
+		"• Presets: <code>sequence</code>, <code>clean</code>, <code>date-prefix</code>, <code>tv</code>",
 }
 
 func helpPage(page string) (string, tg.Keyboard) {
@@ -41,7 +50,7 @@ func helpPage(page string) (string, tg.Keyboard) {
 	kb := tg.Keyboard{
 		{b("Downloads", "dl"), b("Torrents", "tor")},
 		{b("Archives", "unzip"), b("Cloud", "cloud")},
-		{b("Cookies", "cookies")},
+		{b("Rename", "rename"), b("Cookies", "cookies")},
 	}
 	if page != "main" {
 		kb = append(kb, []tg.Button{b("Back", "main")})

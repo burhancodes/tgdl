@@ -16,6 +16,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/media"
 	"github.com/burhanverse/tgdl/internal/pacing"
+	"github.com/burhanverse/tgdl/internal/rename"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
@@ -98,7 +99,7 @@ func readyFiles(st *State, track map[string]seen, done bool) []string {
 		if !st.isPending(rel) {
 			continue
 		}
-		if !done {
+		if !done && !st.isRenameState() {
 			prev, ok := track[f]
 			now := time.Now()
 			if !ok || prev.size != fi.Size {
@@ -348,6 +349,7 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 
 func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (skipUpload bool) {
 	job := st.Job()
+	args := st.Args()
 	name := filepath.Base(f)
 	chat := job.ChatID
 
@@ -364,6 +366,46 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 
 	uploadExtracted := func() error {
 		if files := fsutil.ListUploadable(st.Extract); len(files) > 0 {
+			if args.RenameScheme != "" {
+				schemeStr := args.RenameScheme
+				if p, ok := rename.LookupPreset(schemeStr); ok {
+					schemeStr = p
+				}
+				if sc, err := rename.Parse(schemeStr); err == nil {
+					var inputs []rename.Input
+					for _, f := range files {
+						fi, _ := os.Stat(f)
+						sz := int64(0)
+						var mt time.Time
+						if fi != nil {
+							sz = fi.Size()
+							mt = fi.ModTime()
+						}
+						inputs = append(inputs, rename.Input{
+							OriginalName: filepath.Base(f),
+							Size:         sz,
+							ModTime:      mt,
+							Parent:       filepath.Base(st.Extract),
+						})
+					}
+					opts := rename.Options{}
+					if args.RenameOptions != nil {
+						opts = *args.RenameOptions
+					}
+					if plan, err := sc.Plan(inputs, opts); err == nil {
+						st.setRenameInfo(schemeStr, len(files))
+						for i, entry := range plan.Entries {
+							if i < len(files) && entry.NewName != "" && entry.NewName != filepath.Base(files[i]) {
+								oldP := files[i]
+								newP := filepath.Join(filepath.Dir(oldP), entry.NewName)
+								if err := os.Rename(oldP, newP); err == nil {
+									files[i] = newP
+								}
+							}
+						}
+					}
+				}
+			}
 			total := job.TotalFiles + len(files)
 			_ = m.d.Store.UpdateProgress(context.Background(), job.ID, storeTotal(total))
 			for _, ef := range files {

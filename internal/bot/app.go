@@ -27,20 +27,21 @@ import (
 )
 
 type App struct {
-	cfg           *config.Config
-	auth          *auth.Authorizer
-	store         *store.Store
-	mgr           *jobs.Manager
-	tg            tg.Client
-	api           *tg.BotAPI
-	keys          *upload.Keys
-	hosts         *upload.Hosts
-	search        *torrent.Magnetio
-	lim           *pacing.TelegramLimiter
-	runner        *dl.Runner
-	telegraph     *telegraph.Helper
-	hostUploadSem *semaphore.Weighted
-	botID         int64
+	cfg            *config.Config
+	auth           *auth.Authorizer
+	store          *store.Store
+	mgr            *jobs.Manager
+	tg             tg.Client
+	api            *tg.BotAPI
+	keys           *upload.Keys
+	hosts          *upload.Hosts
+	search         *torrent.Magnetio
+	lim            *pacing.TelegramLimiter
+	runner         *dl.Runner
+	telegraph      *telegraph.Helper
+	hostUploadSem  *semaphore.Weighted
+	botID          int64
+	renameSessions *RenameSessionManager
 }
 
 type Deps struct {
@@ -73,9 +74,16 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
 		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele,
-		hostUploadSem: semaphore.NewWeighted(semLimit), botID: botID}
+		hostUploadSem: semaphore.NewWeighted(semLimit), botID: botID,
+		renameSessions: NewRenameSessionManager(d.Cfg, api)}
 	a.register(b)
 	return a
+}
+
+func (a *App) Stop() {
+	if a.renameSessions != nil {
+		a.renameSessions.Stop()
+	}
 }
 
 func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, host string) {
@@ -195,6 +203,7 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"pdkey", "pixeldrainkey", "pd_key"}, a.cmdKey("pixeldrain", "Pixeldrain"))
 	cmd([]string{"cookies"}, a.cmdCookies)
 	cmd([]string{"gdlconf"}, a.cmdGDLConf)
+	cmd([]string{"rename"}, a.cmdRename)
 
 	cb := func(prefix string, h tgbot.HandlerFunc) {
 		b.RegisterHandler(tgbot.HandlerTypeCallbackQueryData, prefix, tgbot.MatchTypePrefix, h)
@@ -204,6 +213,7 @@ func (a *App) register(b *tgbot.Bot) {
 	cb("convert_", a.cbConvert)
 	cb("help_page:", a.cbHelp)
 	cb("status:", a.cbStatus)
+	cb("rename:", a.cbRename)
 }
 
 func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
@@ -241,12 +251,26 @@ func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 		case "unzip":
 			a.cmdUnzip(ctx, b, u)
 			return
+		case "rename":
+			a.cmdRename(ctx, b, u)
+			return
 		case "cookies":
 			a.cmdCookies(ctx, b, u)
 			return
 		case "gdlconf":
 			a.cmdGDLConf(ctx, b, u)
 			return
+		}
+	}
+	if a.renameSessions != nil {
+		if _, ok := a.renameSessions.Get(m.Chat.ID, userID(m)); ok {
+			if file := mediaOf(m); file != nil {
+				added, atLimit, _ := a.renameSessions.AddFile(m.Chat.ID, userID(m), *file)
+				if atLimit && !added {
+					a.reply(ctx, m, fmt.Sprintf("Batch limit of %d files reached.", a.cfg.RenameMaxBatch))
+				}
+				return
+			}
 		}
 	}
 	if m.ReplyToMessage != nil && m.Text != "" && !strings.HasPrefix(m.Text, "/") {

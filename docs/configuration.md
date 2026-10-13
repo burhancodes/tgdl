@@ -112,3 +112,11 @@ When running a self-hosted `telegram-bot-api` server in `--local` mode (enabled 
 
 - `TGDL_MEMORY_LIMIT_MB`: Set explicit Go memory limit (in MB) via `debug.SetMemoryLimit` (defaults to 75% of cgroup limit if unset).
 - `TGDL_PPROF`: Set to `1` to expose `net/http/pprof` on `127.0.0.1:6060`.
+
+---
+
+## File Renaming Settings (`.env`)
+
+- `RENAME_MAX_BATCH`: Maximum number of files permitted in a single batch rename session (default `30`).
+- `RENAME_SESSION_TTL`: Duration before an inactive batch rename session expires and is cleaned up (default `30m`).
+

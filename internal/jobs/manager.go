@@ -816,9 +816,23 @@ func (m *Manager) finalize(st *State) {
 func (m *Manager) summary(st *State, sent, skipped int) string {
 	job := st.Job()
 	var b strings.Builder
-	fmt.Fprintf(&b, "<b>Job #%s done.</b> Uploaded %d file(s).", status.Esc(job.ID), sent)
-	if skipped > 0 {
-		fmt.Fprintf(&b, " Skipped %d.", skipped)
+	if st.isRenameState() {
+		fmt.Fprintf(&b, "<b>Job #%s done.</b> Renamed %d, skipped %d.", status.Esc(job.ID), sent, skipped)
+		if names := st.renamedFiles(); len(names) > 0 {
+			b.WriteString("\n\n<b>Renamed files</b>")
+			for i, name := range names {
+				if i == 20 {
+					fmt.Fprintf(&b, "\n…and %d more", len(names)-20)
+					break
+				}
+				fmt.Fprintf(&b, "\n• %s", status.Code(name))
+			}
+		}
+	} else {
+		fmt.Fprintf(&b, "<b>Job #%s done.</b> Uploaded %d file(s).", status.Esc(job.ID), sent)
+		if skipped > 0 {
+			fmt.Fprintf(&b, " Skipped %d.", skipped)
+		}
 	}
 	if mirrors := st.mirrorRecords(); len(mirrors) > 0 {
 		b.WriteString("\n\n<b>Mirror links</b>")

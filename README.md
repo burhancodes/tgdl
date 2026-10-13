@@ -18,6 +18,7 @@ internal/
   torrent           aria2 RPC daemon supervisor, tracker list, Magnetio search client
   gdrive, mega      cloud downloaders (MEGA public-link protocol implemented natively)
   upload            GoFile / FileDitch / Pixeldrain uploads, per-user API keys
+  rename            template-based file renaming (pure Go, zero-copy, streaming)
   archive, media    extraction/creation, split-archive detection, ffmpeg wrappers
   netguard          SSRF-safe HTTP transport (checks the connected IP, not a pre-resolve)
   pacing, status, fsutil, auth, logging

@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
     filename TEXT NOT NULL,
     PRIMARY KEY (job_id, filename)
 );
+CREATE TABLE IF NOT EXISTS rename_plans (
+    job_id TEXT PRIMARY KEY,
+    plan TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 `
 
@@ -401,4 +405,18 @@ func (s *Store) SetSplit(ctx context.Context, id string, split bool) error {
 // IsTerminal reports whether the status is final.
 func (s Status) IsTerminal() bool {
 	return s == StatusDone || s == StatusFailed || s == StatusCancelled
+}
+
+func (s *Store) SaveRenamePlan(ctx context.Context, jobID, plan string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO rename_plans (job_id, plan) VALUES (?, ?)`, jobID, plan)
+	return err
+}
+
+func (s *Store) GetRenamePlan(ctx context.Context, jobID string) (string, error) {
+	var plan string
+	err := s.db.QueryRowContext(ctx, `SELECT plan FROM rename_plans WHERE job_id = ?`, jobID).Scan(&plan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return plan, err
 }

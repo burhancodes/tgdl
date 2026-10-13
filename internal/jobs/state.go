@@ -62,6 +62,14 @@ type State struct {
 	archiving   bool
 	archiveFmt  string
 
+	isRename     bool
+	renameScheme string
+	renameCurOld string
+	renameCurNew string
+	renameDone   int
+	renameTotal  int
+	renamedList  []string
+
 	currentUpload string
 	uploadPct     float64
 	uploadSpeed   float64
@@ -396,6 +404,9 @@ func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {
 		CurrentFile: s.currentFile, FileCount: s.fileCount, TorrentName: s.torrentName,
 		Seeders: s.seeders, Peers: s.peers, IsTorrent: s.isTorrent,
 		Converting: s.converting, ConvertFile: s.convertFile, Archiving: s.archiving, ArchiveFmt: s.archiveFmt,
+		IsRename: s.isRename, RenameScheme: s.renameScheme,
+		RenameCurOld: s.renameCurOld, RenameCurNew: s.renameCurNew,
+		RenameDone: s.renameDone, RenameTotal: s.renameTotal,
 		TotalFiles: job.TotalFiles, Sent: s.sent, Skipped: len(s.skipped),
 		UploadFile: s.currentUpload, UploadPct: s.uploadPct, UploadSpeed: s.uploadSpeed, UploadActive: s.currentUpload != "",
 		Args: s.args.Display(),
@@ -445,3 +456,36 @@ func (s *State) setFatal(msg string) {
 	s.cancel()
 }
 func (s *State) fatalErr() string { s.mu.Lock(); defer s.mu.Unlock(); return s.fatal }
+
+func (s *State) setRenameInfo(scheme string, total int) {
+	s.mu.Lock()
+	s.isRename = true
+	s.renameScheme = scheme
+	s.renameTotal = total
+	s.mu.Unlock()
+	s.Poke()
+}
+
+func (s *State) setRenameProgress(curOld, curNew string, done int) {
+	s.mu.Lock()
+	s.renameCurOld = curOld
+	s.renameCurNew = curNew
+	s.renameDone = done
+	if curNew != "" {
+		s.renamedList = append(s.renamedList, curNew)
+	}
+	s.mu.Unlock()
+	s.Poke()
+}
+
+func (s *State) isRenameState() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isRename
+}
+
+func (s *State) renamedFiles() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.renamedList...)
+}

@@ -145,6 +145,7 @@ func commands() []tg.Command {
 		{Name: "fileditch", Description: "Upload replied media to FileDitch"},
 		{Name: "pdup", Description: "Upload replied media to Pixeldrain"},
 		{Name: "unzip", Description: "Download & extract an archive"},
+		{Name: "rename", Description: "Rename media files"},
 		{Name: "status", Description: "Show active tasks"},
 		{Name: "cancel", Description: "Cancel active or queued jobs"},
 		{Name: "help", Description: "Show the help guide"},

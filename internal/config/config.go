@@ -99,6 +99,9 @@ type Config struct {
 	LogFormat string
 
 	PinStatusMessage bool
+
+	RenameMaxBatch   int
+	RenameSessionTTL time.Duration
 }
 
 const defaultOwnerID int64 = 1623457379
@@ -182,6 +185,9 @@ func Load() (*Config, error) {
 		LogFormat: strings.ToLower(envStr("LOG_FORMAT", "text")),
 
 		PinStatusMessage: envBool("PIN_STATUS_MESSAGE", true),
+
+		RenameMaxBatch:   max(1, envInt("RENAME_MAX_BATCH", 200)),
+		RenameSessionTTL: envDuration("RENAME_SESSION_TTL", 30*time.Minute),
 	}
 
 	if c.BotAPILocalDirMap != "" {
@@ -339,6 +345,18 @@ func envFloat(key string, def float64) float64 {
 
 func envSeconds(key string, def float64) time.Duration {
 	return time.Duration(envFloat(key, def) * float64(time.Second))
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			return d
+		}
+		if s, err := strconv.ParseFloat(raw, 64); err == nil {
+			return time.Duration(s * float64(time.Second))
+		}
+	}
+	return def
 }
 
 func envBool(key string, def bool) bool {
