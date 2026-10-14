@@ -5,7 +5,9 @@ import (
 	"math/rand"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNaturalSort(t *testing.T) {
@@ -90,6 +92,63 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 	if got := SanitizeFilename("  ..  "); got != "file" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestFileName(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantExt string
+	}{
+		{"ASCII", "simple_ascii_file.mkv", ".mkv"},
+		{"accents", "café_élégance_crème_brûlée.mp4", ".mp4"},
+		{"Japanese", "日本語の長いファイル名テスト_東京.mkv", ".mkv"},
+		{"emoji", "動画テスト_🎉🚀🔥_great_movie.mkv", ".mkv"},
+		{"name exactly 255 bytes", strings.Repeat("a", 251) + ".txt", ".txt"},
+		{"name 256 bytes", strings.Repeat("a", 252) + ".txt", ".txt"},
+		{"name 4000 bytes", strings.Repeat("日", 1330) + ".mkv", ".mkv"},
+		{"no extension", strings.Repeat("a", 300), ""},
+		{"extension only", ".gitignore", ".gitignore"},
+		{"all dots", ".....", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := NewFileName(tc.input)
+			if fn.Display != tc.input && tc.input != "....." {
+				t.Errorf("Display changed: got %q, want %q", fn.Display, tc.input)
+			}
+			if len([]byte(fn.Disk)) > 255 {
+				t.Errorf("Disk exceeds 255 bytes: %d bytes (%s)", len([]byte(fn.Disk)), fn.Disk)
+			}
+			if !utf8.ValidString(fn.Disk) {
+				t.Errorf("Disk is not valid UTF-8: %s", fn.Disk)
+			}
+			if tc.wantExt != "" && !strings.HasSuffix(fn.Disk, tc.wantExt) {
+				t.Errorf("Disk lost extension: got %s, want ext %s", fn.Disk, tc.wantExt)
+			}
+		})
+	}
+
+	fnA := NewFileName(strings.Repeat("a", 300) + "_alpha.mkv")
+	fnB := NewFileName(strings.Repeat("a", 300) + "_bravo.mkv")
+	if fnA.Disk == fnB.Disk {
+		t.Fatalf("collision detected for distinct long names: %s == %s", fnA.Disk, fnB.Disk)
+	}
+}
+
+func TestTruncateMiddle(t *testing.T) {
+	s := "The_Cold_Sato_san_is_Only_Sweet_to_Me_S01E01_WEBRip_1080p_AV1.mkv"
+	got := TruncateMiddle(s, 30)
+	if len([]rune(got)) > 30 {
+		t.Errorf("TruncateMiddle length %d > 30: %q", len([]rune(got)), got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("TruncateMiddle missing ellipsis: %q", got)
+	}
+	if !strings.HasSuffix(got, ".mkv") {
+		t.Errorf("TruncateMiddle lost extension: %q", got)
 	}
 }
 

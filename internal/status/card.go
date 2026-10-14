@@ -68,18 +68,22 @@ const bullet = "• "
 
 func kv(b *strings.Builder, k, v string) { fmt.Fprintf(b, "%s<b>%s</b>: %s\n", bullet, k, v) }
 
+func nameRow(b *strings.Builder, k, v string) {
+	fmt.Fprintf(b, "%s<b>%s</b>:\n%s\n", bullet, k, Code(v))
+}
+
 func Job(s Snapshot) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "<b>Task #%s</b>\n\n<blockquote>", Esc(s.JobID))
 	kv(&b, "Status", Code(strings.ToUpper(s.Status)))
 	if s.IsTorrent && s.TorrentName != "" {
-		kv(&b, "Torrent", Code(Short(s.TorrentName, 60)))
+		nameRow(&b, "Torrent", s.TorrentName)
 	} else if s.Target != "" {
-		kv(&b, "Target", Code(Short(s.Target, 60)))
+		nameRow(&b, "Target", s.Target)
 	}
 	if s.Args != "" {
-		kv(&b, "Args", Code(Short(s.Args, 60)))
+		kv(&b, "Args", Code(s.Args))
 	}
 	split := "Disabled"
 	if s.SplitEnabled {
@@ -111,14 +115,14 @@ func Job(s Snapshot) string {
 			kv(&b, "Swarm", Code(fmt.Sprintf("Seeders: %d | Leechers: %d", s.Seeders, s.Peers)))
 		}
 		if s.CurrentFile != "" {
-			kv(&b, "Current", Code(Short(s.CurrentFile, 50)))
+			nameRow(&b, "Current", s.CurrentFile)
 		}
 		b.WriteString("</blockquote>\n")
 	}
 
 	if s.Converting {
 		b.WriteString("<b>Converter</b>\n<blockquote>")
-		kv(&b, "File", Code(Short(s.ConvertFile, 50)))
+		nameRow(&b, "File", s.ConvertFile)
 		kv(&b, "State", Code("["+Marquee()+"]"))
 		b.WriteString("</blockquote>\n")
 	}
@@ -130,10 +134,10 @@ func Job(s Snapshot) string {
 	}
 	if s.IsRename {
 		b.WriteString("<b>Rename</b>\n<blockquote>")
-		kv(&b, "Scheme", Code(Short(s.RenameScheme, 50)))
+		kv(&b, "Scheme", Code(s.RenameScheme))
 		kv(&b, "Progress", Code(fmt.Sprintf("%d / %d", s.RenameDone, s.RenameTotal)))
 		if s.RenameCurOld != "" && s.RenameCurNew != "" {
-			kv(&b, "Current", Code(Short(s.RenameCurOld, 30))+" → "+Code(Short(s.RenameCurNew, 30)))
+			fmt.Fprintf(&b, "%s<b>Current</b>:\n%s → %s\n", bullet, Code(s.RenameCurOld), Code(s.RenameCurNew))
 		}
 		b.WriteString("</blockquote>\n")
 	}
@@ -163,7 +167,7 @@ func Job(s Snapshot) string {
 			case "skipped":
 				fmt.Fprintf(&b, "%s <b>%s</b>: %s\n", tree, Esc(label), Code("Skipped (>10GB)"))
 			case "failed":
-				fmt.Fprintf(&b, "%s <b>%s</b>: %s\n", tree, Esc(label), Code(Short(h.Error, 40)))
+				fmt.Fprintf(&b, "%s <b>%s</b>: %s\n", tree, Esc(label), Code(h.Error))
 			default:
 				fmt.Fprintf(&b, "%s <b>%s</b>: %s\n", tree, Esc(label), Code("Pending"))
 			}
@@ -178,7 +182,7 @@ func Job(s Snapshot) string {
 			kv(&b, "Skipped", Code(fmt.Sprint(s.Skipped)))
 		}
 		if s.UploadActive && s.UploadFile != "" {
-			kv(&b, "Current", Code(Short(s.UploadFile, 50)))
+			nameRow(&b, "Current", s.UploadFile)
 			kv(&b, "Progress", Code(fmt.Sprintf("%.1f%%", s.UploadPct))+" "+Code(Bar(s.UploadPct)))
 			kv(&b, "Speed", Code(Size(s.UploadSpeed)+"/s"))
 		}
@@ -201,9 +205,9 @@ func Queued(jobID, target, args string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<b>Task #%s Queued</b>\n\n<blockquote>", Esc(jobID))
 	kv(&b, "Status", Code("QUEUED"))
-	kv(&b, "Target", Code(Short(target, 60)))
+	nameRow(&b, "Target", target)
 	if args != "" {
-		kv(&b, "Args", Code(Short(args, 60)))
+		kv(&b, "Args", Code(args))
 	}
 	b.WriteString("</blockquote>")
 	return b.String()

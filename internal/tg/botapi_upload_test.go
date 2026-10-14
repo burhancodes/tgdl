@@ -26,7 +26,7 @@ import (
 func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 	tempDir := t.TempDir()
 	docPath := filepath.Join(tempDir, "sample_document.txt")
-	docData := bytes.Repeat([]byte("This is test document payload for streaming upload.\n"), 5000) // ~260 KB
+	docData := bytes.Repeat([]byte("This is test document payload for streaming upload.\n"), 5000)
 	if err := os.WriteFile(docPath, docData, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,6 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 		}
 		boundary := params["boundary"]
 
-		// Read entire body and verify exact Content-Length
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("failed to read body: %v", err)
@@ -65,7 +64,6 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 			t.Errorf("body length %d != ContentLength %d", len(bodyBytes), r.ContentLength)
 		}
 
-		// Parse multipart
 		mr := multipart.NewReader(bytes.NewReader(bodyBytes), boundary)
 		fields := make(map[string]string)
 		files := make(map[string][]byte)
@@ -92,7 +90,6 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 			}
 		}
 
-		// Verify fields
 		if fields["chat_id"] != "12345" {
 			t.Errorf("chat_id = %s, want 12345", fields["chat_id"])
 		}
@@ -112,7 +109,6 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 			t.Errorf("thumbnail = %s, want attach://thumb", fields["thumbnail"])
 		}
 
-		// Verify files
 		if !bytes.Equal(files["thumb"], thumbData) {
 			t.Errorf("thumbnail data mismatch, len %d vs %d", len(files["thumb"]), len(thumbData))
 		}
@@ -137,7 +133,7 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 
 	var progressCalled bool
 	var lastProgCurr, lastProgTotal int64
-	err := api.Upload(context.Background(), 12345, Upload{
+	ref, err := api.Upload(context.Background(), 12345, Upload{
 		Path:    docPath,
 		Caption: "<b>Test Caption</b>",
 		Kind:    KindDocument,
@@ -150,6 +146,9 @@ func TestUpload_StreamingMultipartAndContentLength(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Upload failed: %v", err)
+	}
+	if ref.ID != 42 {
+		t.Errorf("expected MessageRef ID 42, got %d", ref.ID)
 	}
 
 	if reqCount.Load() != 1 {
@@ -243,12 +242,15 @@ func TestUploadGroup_Streaming(t *testing.T) {
 	api := NewBotAPI(nil, "TESTTOKEN")
 	api.BaseURL = server.URL
 
-	err := api.UploadGroup(context.Background(), 54321, []GroupItem{
+	refs, err := api.UploadGroup(context.Background(), 54321, []GroupItem{
 		{Path: f1Path, Caption: "Video item", Video: true},
 		{Path: f2Path, Caption: "Document item"},
 	})
 	if err != nil {
 		t.Fatalf("UploadGroup failed: %v", err)
+	}
+	if len(refs) != 2 || refs[0].ID != 1 || refs[1].ID != 2 {
+		t.Errorf("unexpected refs: %+v", refs)
 	}
 }
 
@@ -281,13 +283,12 @@ func TestUpload_512MB_SparseFile_HeapGrowth(t *testing.T) {
 	api := NewBotAPI(nil, "TESTTOKEN")
 	api.BaseURL = server.URL
 
-	// Warm-up runtime memory stats
 	runtime.GC()
 	var memBefore runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
 
 	var lastProgress atomic.Int64
-	err = api.Upload(context.Background(), 777, Upload{
+	_, err = api.Upload(context.Background(), 777, Upload{
 		Path: sparsePath,
 		Kind: KindDocument,
 		Progress: func(current, total int64) {
@@ -309,7 +310,7 @@ func TestUpload_512MB_SparseFile_HeapGrowth(t *testing.T) {
 		heapInuseDelta, float64(heapInuseDelta)/(1024*1024),
 		totalAllocDelta, float64(totalAllocDelta)/(1024*1024))
 
-	const maxAllowed = 64 * 1024 * 1024 // 64 MiB limit as required
+	const maxAllowed = 64 * 1024 * 1024
 	if heapInuseDelta > maxAllowed {
 		t.Errorf("HeapInuse delta %d exceeds 64 MiB limit", heapInuseDelta)
 	}
@@ -343,7 +344,7 @@ func TestUpload_CtxCancel_PromptAndNoGoroutineLeak(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 64*1024)
 		_, _ = io.ReadFull(r.Body, buf)
-		cancel() // Cancel context during transfer!
+		cancel()
 		_, _ = io.Copy(io.Discard, r.Body)
 	}))
 	defer server.Close()
@@ -351,13 +352,12 @@ func TestUpload_CtxCancel_PromptAndNoGoroutineLeak(t *testing.T) {
 	api := NewBotAPI(nil, "TESTTOKEN")
 	api.BaseURL = server.URL
 
-	// Warm-up client connections and measure baseline goroutines
 	api.uploadClient.CloseIdleConnections()
 	time.Sleep(50 * time.Millisecond)
 	initialGoroutines := runtime.NumGoroutine()
 
 	start := time.Now()
-	err = api.Upload(ctx, 123, Upload{
+	_, err = api.Upload(ctx, 123, Upload{
 		Path: sparsePath,
 		Kind: KindDocument,
 	})
@@ -370,7 +370,6 @@ func TestUpload_CtxCancel_PromptAndNoGoroutineLeak(t *testing.T) {
 		t.Errorf("expected context.Canceled, got: %v", err)
 	}
 
-	// Wait briefly for transport connections to close and check goroutine leak
 	api.uploadClient.CloseIdleConnections()
 	var finalGoroutines int
 	deadline := time.Now().Add(2 * time.Second)
@@ -446,9 +445,8 @@ func TestUpload_LocalDirMap(t *testing.T) {
 	api.BaseURL = server.URL
 	api.SetLocalDirMap(tempDir, "/container/downloads")
 
-	// 1. Mapped file should send file:/// URL
 	var progCalled bool
-	err := api.Upload(context.Background(), 123, Upload{
+	_, err := api.Upload(context.Background(), 123, Upload{
 		Path: localFile,
 		Kind: KindVideo,
 		Progress: func(curr, total int64) {
@@ -465,8 +463,7 @@ func TestUpload_LocalDirMap(t *testing.T) {
 		t.Errorf("expected ProgressFunc to be invoked for local upload")
 	}
 
-	// 2. Unmapped file should fall back to streaming multipart
-	err = api.Upload(context.Background(), 123, Upload{
+	_, err = api.Upload(context.Background(), 123, Upload{
 		Path: outsideFile,
 		Kind: KindVideo,
 	})
@@ -485,7 +482,6 @@ func TestUpload_ErrorMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. FloodError (429 with retry_after)
 	serverFlood := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -496,13 +492,12 @@ func TestUpload_ErrorMapping(t *testing.T) {
 
 	api := NewBotAPI(nil, "TESTTOKEN")
 	api.BaseURL = serverFlood.URL
-	err := api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
+	_, err := api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
 	secs, isFlood := IsFlood(err)
 	if !isFlood || secs != 12 {
 		t.Errorf("expected FloodError with 12s, got %v (isFlood=%v, secs=%d)", err, isFlood, secs)
 	}
 
-	// 2. BadRequestError (400)
 	serverBadReq := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusBadRequest)
@@ -512,16 +507,14 @@ func TestUpload_ErrorMapping(t *testing.T) {
 	defer serverBadReq.Close()
 
 	api.BaseURL = serverBadReq.URL
-	err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
+	_, err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
 	msg, isBadReq := IsBadRequest(err)
 	if !isBadReq || msg != "Bad Request: PHOTO_SAVE_FILE_INVALID" {
 		t.Errorf("expected BadRequestError, got %v (isBadReq=%v, msg=%s)", err, isBadReq, msg)
 	}
 
-	// 3. Ambiguous upload (connection closed after body is fully sent)
 	serverAmbiguous := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body) // Read whole body to completion
-		// Hijack connection and abruptly close it
+		io.Copy(io.Discard, r.Body)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			t.Fatal("server does not support hijacking")
@@ -532,12 +525,11 @@ func TestUpload_ErrorMapping(t *testing.T) {
 	defer serverAmbiguous.Close()
 
 	api.BaseURL = serverAmbiguous.URL
-	err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
+	_, err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
 	if !errors.Is(err, ErrAmbiguousUpload) {
 		t.Errorf("expected ErrAmbiguousUpload, got: %v", err)
 	}
 
-	// 4. Server 504 Gateway Timeout after body fully sent is also ambiguous
 	server504 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusGatewayTimeout)
@@ -546,12 +538,11 @@ func TestUpload_ErrorMapping(t *testing.T) {
 	defer server504.Close()
 
 	api.BaseURL = server504.URL
-	err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
+	_, err = api.Upload(context.Background(), 123, Upload{Path: filePath, Kind: KindDocument})
 	if !errors.Is(err, ErrAmbiguousUpload) {
 		t.Errorf("expected ErrAmbiguousUpload on 504, got: %v", err)
 	}
 
-	// 5. Connection closed BEFORE body is fully sent is NOT ambiguous
 	bigPath := filepath.Join(tempDir, "big_partial.bin")
 	fBig, err := os.Create(bigPath)
 	if err != nil {
@@ -572,7 +563,6 @@ func TestUpload_ErrorMapping(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Read only first 100 bytes and close connection abruptly
 			buf := make([]byte, 100)
 			_, _ = conn.Read(buf)
 			conn.Close()
@@ -580,7 +570,7 @@ func TestUpload_ErrorMapping(t *testing.T) {
 	}()
 
 	api.BaseURL = "http://" + listener.Addr().String()
-	err = api.Upload(context.Background(), 123, Upload{Path: bigPath, Kind: KindDocument})
+	_, err = api.Upload(context.Background(), 123, Upload{Path: bigPath, Kind: KindDocument})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -607,7 +597,6 @@ func TestUpload_FileMode_TimeoutCalculation(t *testing.T) {
 	var handlerCalled atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlerCalled.Store(true)
-		// Fake server delays its response
 		time.Sleep(20 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok": true, "result": {"message_id": 100}}`))
@@ -633,7 +622,7 @@ func TestUpload_FileMode_TimeoutCalculation(t *testing.T) {
 
 	expectedMinTimeout := 15*time.Minute + time.Duration(size600MB/(512*1024))*time.Second
 	var progCurr atomic.Int64
-	err = api.Upload(context.Background(), 123, Upload{
+	_, err = api.Upload(context.Background(), 123, Upload{
 		Path: filePath,
 		Kind: KindDocument,
 		Progress: func(curr, total int64) {
@@ -714,7 +703,7 @@ func TestUpload_FileMode_FallbackOn400(t *testing.T) {
 	api.BaseURL = server.URL
 	api.SetLocalDirMap(tempDir, "/container/downloads")
 
-	err := api.Upload(context.Background(), 123, Upload{
+	_, err := api.Upload(context.Background(), 123, Upload{
 		Path: filePath,
 		Kind: KindDocument,
 	})
@@ -836,8 +825,7 @@ func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
 	api.BaseURL = server.URL
 	api.SetLocalDirMap(tempDir, "/container/downloads")
 
-	// 1. KindVideo with ServerVersion >= 9.0 (default 9.0)
-	err := api.Upload(context.Background(), 123, Upload{
+	_, err := api.Upload(context.Background(), 123, Upload{
 		Path:  filePath,
 		Thumb: thumbPath,
 		Kind:  KindVideo,
@@ -846,12 +834,10 @@ func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
 		t.Fatalf("Upload failed: %v", err)
 	}
 
-	// The video file itself should use file:// because of LocalDirMap
 	if val := receivedFields["video"]; !strings.HasPrefix(val, "file://") {
 		t.Errorf("expected video field to be file:// URL, got %q", val)
 	}
 
-	// Thumbnail must be attach://thumb and NOT file://
 	if val := receivedFields["thumbnail"]; val != "attach://thumb" {
 		t.Errorf("expected thumbnail field to be 'attach://thumb', got %q", val)
 	}
@@ -859,7 +845,6 @@ func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
 		t.Errorf("expected multipart file part named 'thumb' with thumbnail content, got %q (found=%v)", string(data), ok)
 	}
 
-	// Cover must be attach://cover and present on video upload when version >= 9.0
 	if val := receivedFields["cover"]; val != "attach://cover" {
 		t.Errorf("expected cover field to be 'attach://cover', got %q", val)
 	}
@@ -867,9 +852,8 @@ func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
 		t.Errorf("expected multipart file part named 'cover' with cover content, got %q (found=%v)", string(data), ok)
 	}
 
-	// 2. KindVideo with ServerVersion < 9.0
 	api.SetServerVersion(8.3)
-	err = api.Upload(context.Background(), 123, Upload{
+	_, err = api.Upload(context.Background(), 123, Upload{
 		Path:  filePath,
 		Thumb: thumbPath,
 		Kind:  KindVideo,
@@ -889,5 +873,66 @@ func TestUpload_ThumbnailAlwaysMultipart_LocalDirMap(t *testing.T) {
 	}
 	if data, ok := receivedFiles["thumb"]; !ok || string(data) != "THUMB_JPEG_DATA" {
 		t.Errorf("expected multipart 'thumb' on v8.3, got %q (found=%v)", string(data), ok)
+	}
+}
+
+func TestUpload_DisplayFileName_StreamingPath(t *testing.T) {
+	tempDir := t.TempDir()
+	diskName := "short~12345678.mkv"
+	filePath := filepath.Join(tempDir, diskName)
+	content := []byte("TEST_VIDEO_STREAMING_CONTENT")
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	displayName := "A Very Long Movie Title With Special Characters - S01E01 - Extended Edition.mkv"
+	var receivedFileName string
+	var wasMultipartFile bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("parse media type: %v", err)
+		}
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		for {
+			p, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("next part error: %v", err)
+			}
+			if fn := p.FileName(); fn != "" {
+				wasMultipartFile = true
+				receivedFileName = fn
+			}
+			_, _ = io.Copy(io.Discard, p)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok": true, "result": {"message_id": 999}}`))
+	}))
+	defer server.Close()
+
+	api := NewBotAPI(nil, "TESTTOKEN")
+	api.BaseURL = server.URL
+	api.SetLocalDirMap(tempDir, "/container/downloads")
+
+	ref, err := api.Upload(context.Background(), 12345, Upload{
+		Path:     filePath,
+		FileName: displayName,
+		Kind:     KindDocument,
+	})
+	if err != nil {
+		t.Fatalf("upload failed: %v", err)
+	}
+	if ref.ID != 999 {
+		t.Errorf("got MessageRef %d, want 999", ref.ID)
+	}
+	if !wasMultipartFile {
+		t.Errorf("expected streaming multipart upload when Display != Disk, but file was not sent as multipart")
+	}
+	if receivedFileName != displayName {
+		t.Errorf("expected multipart filename %q, got %q", displayName, receivedFileName)
 	}
 }

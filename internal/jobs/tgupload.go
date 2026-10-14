@@ -67,24 +67,43 @@ func (u *tgUploader) getAlbumMaxBytes() int64 {
 	return u.albumMaxBytes
 }
 
+func buildCaption(name string) (string, bool) {
+	runes := []rune(name)
+	if len(runes) <= 1024 {
+		return "<code>" + status.Esc(name) + "</code>", false
+	}
+	return "<code>" + status.Esc(string(runes[:1020])) + "…" + "</code>", true
+}
+
 func caption(path string) string {
-	name := filepath.Base(path)
-	suffix := filepath.Ext(name)
-	stem := strings.TrimSuffix(name, suffix)
-	if m := partSuffixRE.FindString(name); m != "" {
-		suffix, stem = m, name[:len(name)-len(m)]
+	c, _ := buildCaption(filepath.Base(path))
+	return c
+}
+
+func (u *tgUploader) sendOverflowReplies(ctx context.Context, chatID int64, replyToID int, name string) error {
+	runes := []rune(name)
+	for i := 0; i < len(runes); i += 4000 {
+		end := i + 4000
+		if end > len(runes) {
+			end = len(runes)
+		}
+		part := string(runes[i:end])
+		html := "<code>" + status.Esc(part) + "</code>"
+		if err := u.lim.Acquire(ctx, chatID); err != nil {
+			return err
+		}
+		_, err := u.tg.Send(ctx, chatID, html, tg.SendOpts{ReplyTo: replyToID})
+		u.lim.RecordCallDone(chatID)
+		if err != nil {
+			return err
+		}
 	}
-	display := name
-	if len([]rune(name)) > 60 {
-		remain := max(10, 60-len([]rune(suffix)))
-		display = string([]rune(stem)[:min(remain, len([]rune(stem)))]) + suffix
-	}
-	return "<code>" + status.Esc(display) + "</code>"
+	return nil
 }
 
 type UploadResult struct{ AsDoc bool }
 
-func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDoc bool, progress tg.ProgressFunc) (bool, error) {
+func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDoc bool, progress tg.ProgressFunc, optFileName ...fsutil.FileName) (bool, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return asDoc, err
@@ -109,6 +128,13 @@ func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDo
 		}
 	}()
 
+	var fn fsutil.FileName
+	if len(optFileName) > 0 && optFileName[0].Display != "" {
+		fn = optFileName[0]
+	} else {
+		fn = fsutil.NewFileName(filepath.Base(path))
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -117,7 +143,7 @@ func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDo
 			}
 		}
 		var err error
-		asDoc, err = u.uploadOnce(ctx, chatID, path, asDoc, progress)
+		asDoc, err = u.uploadOnce(ctx, chatID, path, asDoc, progress, fn)
 		if err == nil {
 			return asDoc, nil
 		}
@@ -137,7 +163,7 @@ func (u *tgUploader) Upload(ctx context.Context, chatID int64, path string, asDo
 	return asDoc, lastErr
 }
 
-func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, asDoc bool, progress tg.ProgressFunc) (bool, error) {
+func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, asDoc bool, progress tg.ProgressFunc, fn fsutil.FileName) (bool, error) {
 	ext := media.Ext(path)
 	force := asDoc && ext != ".mkv"
 	isVideo, isAudio := media.VideoExt[ext], media.AudioExt[ext]
@@ -150,11 +176,13 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 		force = true
 	}
 
+	capText, overflow := buildCaption(fn.Display)
+
 	for flood := 0; ; flood++ {
 		if err := u.lim.AcquireUpload(ctx, chatID); err != nil {
 			return asDoc, err
 		}
-		up := tg.Upload{Path: path, Caption: caption(path), Progress: progress}
+		up := tg.Upload{Path: path, FileName: fn.Display, Caption: capText, Progress: progress}
 		var cleanup []string
 		switch {
 		case force || (!isVideo && !isAudio && !isImage):
@@ -178,7 +206,7 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 			ai := media.ProbeAudio(ctx, path)
 			title := ai.Title
 			if title == "" {
-				title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+				title = strings.TrimSuffix(fn.Display, filepath.Ext(fn.Display))
 			}
 			up.Kind, up.Duration, up.Performer, up.Title = tg.KindAudio, ai.Duration, ai.Artist, title
 		default:
@@ -188,12 +216,15 @@ func (u *tgUploader) uploadOnce(ctx context.Context, chatID int64, path string, 
 			cleanup = append(cleanup, up.Thumb)
 		}
 
-		err := u.tg.Upload(ctx, chatID, up)
+		ref, err := u.tg.Upload(ctx, chatID, up)
 		u.lim.RecordUploadDone(chatID)
 		for _, c := range cleanup {
 			_ = os.Remove(c)
 		}
 		if err == nil {
+			if overflow && ref.Valid() {
+				_ = u.sendOverflowReplies(ctx, chatID, ref.ID, fn.Display)
+			}
 			if up.Kind == tg.KindVideo && up.Duration >= 120 && up.Thumb != "" {
 				u.sendScreenshots(ctx, chatID, path, up.Duration)
 			}
@@ -249,7 +280,7 @@ func (u *tgUploader) sendScreenshots(ctx context.Context, chatID int64, path str
 	if err := u.lim.Acquire(ctx, chatID); err != nil {
 		return
 	}
-	if err := u.tg.UploadGroup(ctx, chatID, items); err != nil {
+	if _, err := u.tg.UploadGroup(ctx, chatID, items); err != nil {
 		slog.Warn("screenshot album failed", "err", err)
 	}
 	u.lim.RecordUploadDone(chatID)
@@ -304,6 +335,10 @@ func PlanAlbumBatches(sizes []int64, maxTotalBytes int64) [][]int {
 }
 
 func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []string, asDoc bool, progress tg.ProgressFunc, onUploaded ...func(path string)) (bool, error) {
+	return u.UploadGroupWithNames(ctx, chatID, files, nil, asDoc, progress, onUploaded...)
+}
+
+func (u *tgUploader) UploadGroupWithNames(ctx context.Context, chatID int64, files []string, names map[string]fsutil.FileName, asDoc bool, progress tg.ProgressFunc, onUploaded ...func(path string)) (bool, error) {
 	var notifySuccess func(string)
 	if len(onUploaded) > 0 && onUploaded[0] != nil {
 		notifySuccess = onUploaded[0]
@@ -324,8 +359,14 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 	for _, batchIndices := range plan {
 		if len(batchIndices) == 1 {
 			f := files[batchIndices[0]]
+			var fn fsutil.FileName
+			if names != nil {
+				if n, ok := names[f]; ok && n.Display != "" {
+					fn = n
+				}
+			}
 			var err error
-			if asDoc, err = u.Upload(ctx, chatID, f, asDoc, progress); err != nil {
+			if asDoc, err = u.Upload(ctx, chatID, f, asDoc, progress, fn); err != nil {
 				return asDoc, err
 			}
 			if notifySuccess != nil {
@@ -336,16 +377,32 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 
 		batchFiles := make([]string, len(batchIndices))
 		items := make([]tg.GroupItem, len(batchIndices))
+		overflows := make([]bool, len(batchIndices))
+		itemNames := make([]fsutil.FileName, len(batchIndices))
 		for k, idx := range batchIndices {
 			f := files[idx]
 			batchFiles[k] = f
-			items[k] = tg.GroupItem{Path: f, Caption: caption(f), Video: media.VideoExt[media.Ext(f)]}
+			fn := fsutil.NewFileName(filepath.Base(f))
+			if names != nil {
+				if n, ok := names[f]; ok && n.Display != "" {
+					fn = n
+				}
+			}
+			itemNames[k] = fn
+			capText, ovf := buildCaption(fn.Display)
+			overflows[k] = ovf
+			items[k] = tg.GroupItem{
+				Path:     f,
+				FileName: fn.Display,
+				Caption:  capText,
+				Video:    media.VideoExt[media.Ext(f)],
+			}
 		}
 
 		if err := u.lim.AcquireUpload(ctx, chatID); err != nil {
 			return asDoc, err
 		}
-		err := u.tg.UploadGroup(ctx, chatID, items)
+		refs, err := u.tg.UploadGroup(ctx, chatID, items)
 		u.lim.RecordUploadDone(chatID)
 		if secs, ok := tg.IsFlood(err); ok {
 			u.lim.NotifyFloodWait(secs, chatID)
@@ -359,7 +416,7 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 			if err := u.lim.AcquireUpload(ctx, chatID); err != nil {
 				return asDoc, err
 			}
-			err = u.tg.UploadGroup(ctx, chatID, items)
+			refs, err = u.tg.UploadGroup(ctx, chatID, items)
 			u.lim.RecordUploadDone(chatID)
 		}
 		if err != nil {
@@ -368,9 +425,9 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 				return asDoc, err
 			}
 			slog.Warn("album upload failed; falling back to single uploads", "err", err)
-			for _, f := range batchFiles {
+			for k, f := range batchFiles {
 				var e error
-				if asDoc, e = u.Upload(ctx, chatID, f, asDoc, progress); e != nil {
+				if asDoc, e = u.Upload(ctx, chatID, f, asDoc, progress, itemNames[k]); e != nil {
 					return asDoc, e
 				}
 				if notifySuccess != nil {
@@ -378,6 +435,19 @@ func (u *tgUploader) UploadGroup(ctx context.Context, chatID int64, files []stri
 				}
 			}
 		} else {
+			for k, ovf := range overflows {
+				if ovf {
+					targetID := 0
+					if k < len(refs) && refs[k].Valid() {
+						targetID = refs[k].ID
+					} else if len(refs) > 0 && refs[0].Valid() {
+						targetID = refs[0].ID
+					}
+					if targetID != 0 {
+						_ = u.sendOverflowReplies(ctx, chatID, targetID, itemNames[k].Display)
+					}
+				}
+			}
 			if notifySuccess != nil {
 				for _, f := range batchFiles {
 					notifySuccess(f)

@@ -42,3 +42,34 @@ func TestRenameCard(t *testing.T) {
 		t.Errorf("card output missing rename info:\n%s", card)
 	}
 }
+
+func TestFit(t *testing.T) {
+	snap := Snapshot{
+		JobID:       "123",
+		Status:      "uploading",
+		CurrentFile: "normal_file.mkv",
+	}
+	normalCard := Job(snap)
+	msgs := Fit(normalCard, 4096)
+	if len(msgs) != 1 || msgs[0] != normalCard {
+		t.Fatalf("normal card should be unchanged, got %d messages", len(msgs))
+	}
+
+	longName := strings.Repeat("A", 5000) + ".mkv"
+	snapLong := Snapshot{
+		JobID:       "123",
+		Status:      "uploading",
+		CurrentFile: longName,
+	}
+	cardLong := Job(snapLong)
+	msgsLong := Fit(cardLong, 4096)
+	if len(msgsLong) < 2 {
+		t.Fatalf("expected follow-up message for 5000-char name, got %d", len(msgsLong))
+	}
+	if len([]rune(msgsLong[0])) > 4096 {
+		t.Errorf("card message exceeds 4096: %d", len([]rune(msgsLong[0])))
+	}
+	if !strings.Contains(msgsLong[1], longName) {
+		t.Errorf("follow-up message missing full 5000-char name")
+	}
+}

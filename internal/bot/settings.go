@@ -374,7 +374,7 @@ func (a *App) handleSettingsExport(ctx context.Context, m *models.Message) {
 		Caption: "<b>tgdl Settings Export</b>\n<blockquote>Secrets are redacted.</blockquote>",
 		Kind:    tg.KindDocument,
 	}
-	if err := a.tg.Upload(ctx, m.Chat.ID, u); err != nil {
+	if _, err := a.tg.Upload(ctx, m.Chat.ID, u); err != nil {
 		a.reply(ctx, m, fmt.Sprintf("Upload failed: %s", html.EscapeString(err.Error())))
 	}
 }

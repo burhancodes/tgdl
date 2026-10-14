@@ -16,7 +16,6 @@ import (
 )
 
 func TestUploadLargeFileMemory(t *testing.T) {
-	// Fake Bot API server that discards bodies
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -24,7 +23,6 @@ func TestUploadLargeFileMemory(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Create 1.5 GiB sparse file
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "large_sparse_1500M.bin")
 	f, err := os.Create(filePath)
@@ -45,7 +43,7 @@ func TestUploadLargeFileMemory(t *testing.T) {
 	api := tg.NewBotAPI(nil, "123456:TEST")
 	api.BaseURL = srv.URL
 
-	err = api.Upload(context.Background(), 123456, tg.Upload{
+	_, err = api.Upload(context.Background(), 123456, tg.Upload{
 		Path: filePath,
 		Kind: tg.KindDocument,
 	})
@@ -60,7 +58,6 @@ func TestUploadLargeFileMemory(t *testing.T) {
 	sysMB := float64(memAfter.Sys) / (1024 * 1024)
 	t.Logf("Allocated: %.2f MB, Sys: %.2f MB", allocMB, sysMB)
 
-	// Must not exceed 200 MiB
 	if memAfter.Alloc > 200*1024*1024 {
 		t.Fatalf("memory allocation too high: %d bytes (%.2f MB > 200 MB)", memAfter.Alloc, allocMB)
 	}

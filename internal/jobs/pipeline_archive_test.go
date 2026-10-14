@@ -89,11 +89,11 @@ func TestPipeline_ArchiveHandling(t *testing.T) {
 			var mu sync.Mutex
 			var uploadedFiles []string
 			mock := &mockTGClient{
-				uploadFunc: func(ctx context.Context, chatID int64, u tg.Upload) error {
+				uploadFunc: func(ctx context.Context, chatID int64, u tg.Upload) (tg.MessageRef, error) {
 					mu.Lock()
 					uploadedFiles = append(uploadedFiles, filepath.Base(u.Path))
 					mu.Unlock()
-					return nil
+					return tg.MessageRef{ChatID: chatID, ID: 1}, nil
 				},
 			}
 

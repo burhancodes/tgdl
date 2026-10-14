@@ -30,7 +30,6 @@ const (
 	userAgent = "Mozilla/5.0 (X11; Linux x86_64)"
 )
 
-// ErrDirect wraps direct-download failures surfaced to users.
 var ErrDirect = errors.New("direct download failed")
 
 var directExts = map[string]bool{}
@@ -60,7 +59,6 @@ func urlExt(u string) string {
 	return strings.ToLower(path.Ext(p.Path))
 }
 
-// IsDirectURL reports whether the job URL looks like a direct file link.
 func IsDirectURL(raw string) bool {
 	if raw == "" {
 		return false
@@ -94,12 +92,12 @@ func IsDirectURL(raw string) bool {
 	return false
 }
 
-// Direct downloads plain HTTP(S) files and HLS playlists.
 type Direct struct {
-	cfg      *config.Config
-	client   *http.Client
-	Headers  map[string]string
-	Progress ProgressFunc
+	cfg       *config.Config
+	client    *http.Client
+	Headers   map[string]string
+	Progress  ProgressFunc
+	FileNames map[string]fsutil.FileName
 
 	processed int64
 	total     int64
@@ -107,7 +105,6 @@ type Direct struct {
 	files     []string
 }
 
-// NewDirect constructs a downloader that enforces the SSRF policy in cfg.
 func NewDirect(cfg *config.Config, progress ProgressFunc) *Direct {
 	return &Direct{
 		cfg:      cfg,
@@ -117,10 +114,10 @@ func NewDirect(cfg *config.Config, progress ProgressFunc) *Direct {
 			ForceIPv6:     cfg.ForceIPv6,
 			SourceAddress: cfg.SourceAddress,
 		}),
+		FileNames: make(map[string]fsutil.FileName),
 	}
 }
 
-// Client exposes the guarded HTTP client for sibling engines.
 func (d *Direct) Client() *http.Client { return d.client }
 
 func (d *Direct) report(file, u string) {
@@ -131,8 +128,6 @@ func (d *Direct) report(file, u string) {
 
 type item struct{ URL, Filename, Subpath string }
 
-// Download fetches one or more URLs into destDir. contents may be a single
-// URL, a whitespace-separated list, or a JSON array of URLs.
 func (d *Direct) Download(ctx context.Context, destDir, contents string) ([]string, error) {
 	items := parseItems(contents)
 	if len(items) == 0 {
@@ -217,7 +212,6 @@ func parseItems(contents string) []item {
 	return items
 }
 
-// DownloadItems downloads each item; it fails only if every item failed.
 func (d *Direct) DownloadItems(ctx context.Context, destDir string, items []item) ([]string, error) {
 	if destDir == "" {
 		return nil, fmt.Errorf("%w: destination directory required", ErrDirect)
@@ -251,7 +245,6 @@ func (d *Direct) DownloadItems(ctx context.Context, destDir string, items []item
 
 var cdFilenameRE = regexp.MustCompile(`(?i)filename\*?=(?:UTF-8'')?"?([^";]+)"?`)
 
-// FilenameFromResponse derives a safe filename from headers or the URL path.
 func FilenameFromResponse(rawURL string, h http.Header) string {
 	if h != nil {
 		if cd := h.Get("Content-Disposition"); cd != "" {
@@ -312,7 +305,15 @@ func (d *Direct) fetchItem(ctx context.Context, destDir string, it item, thr *pa
 			name = FilenameFromResponse(it.URL, nil)
 		}
 		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".mp4"
-		return d.downloadHLS(ctx, it.URL, filepath.Join(saveDir, fsutil.SanitizeFilename(name)))
+		fn := fsutil.NewFileName(name)
+		out, err := d.downloadHLS(ctx, it.URL, filepath.Join(saveDir, fn.Disk))
+		if err == nil {
+			if d.FileNames == nil {
+				d.FileNames = make(map[string]fsutil.FileName)
+			}
+			d.FileNames[out] = fn
+		}
+		return out, err
 	}
 
 	req, err := d.newRequest(ctx, it.URL)
@@ -328,12 +329,12 @@ func (d *Direct) fetchItem(ctx context.Context, destDir string, it item, thr *pa
 		return "", fmt.Errorf("HTTP %d - %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
-	filename := it.Filename
-	if filename == "" {
-		filename = FilenameFromResponse(resp.Request.URL.String(), resp.Header)
+	rawName := it.Filename
+	if rawName == "" {
+		rawName = FilenameFromResponse(resp.Request.URL.String(), resp.Header)
 	}
-	filename = fsutil.SanitizeFilename(filename)
-	ext := strings.ToLower(filepath.Ext(filename))
+	fn := fsutil.NewFileName(rawName)
+	ext := strings.ToLower(filepath.Ext(fn.Display))
 	textExt := map[string]bool{".html": true, ".htm": true, ".txt": true, ".json": true, ".xml": true, ".xhtml": true}
 	ct := strings.ToLower(strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]))
 	if (ct == "text/html" || ct == "text/plain") && !textExt[ext] {
@@ -352,8 +353,14 @@ func (d *Direct) fetchItem(ctx context.Context, destDir string, it item, thr *pa
 	if resp.ContentLength > 0 {
 		d.total += resp.ContentLength
 	}
-	out := filepath.Join(saveDir, filename)
-	part := out + ".part"
+	out := filepath.Join(saveDir, fn.Disk)
+	partBase := fn.Disk
+	if len([]byte(partBase))+5 > 255 {
+		ext := filepath.Ext(partBase)
+		stem := strings.TrimSuffix(partBase, ext)
+		partBase = fsutil.TruncateUTF8(stem, 250-len([]byte(ext))) + ext
+	}
+	part := filepath.Join(saveDir, partBase+".part")
 	f, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return "", err
@@ -373,7 +380,7 @@ func (d *Direct) fetchItem(ctx context.Context, destDir string, it item, thr *pa
 				return "", terr
 			}
 			d.processed += int64(n)
-			d.report(filename, it.URL)
+			d.report(fn.Display, it.URL)
 		}
 		if rerr == io.EOF {
 			break
@@ -391,5 +398,9 @@ func (d *Direct) fetchItem(ctx context.Context, destDir string, it item, thr *pa
 		_ = os.Remove(part)
 		return "", err
 	}
+	if d.FileNames == nil {
+		d.FileNames = make(map[string]fsutil.FileName)
+	}
+	d.FileNames[out] = fn
 	return out, nil
 }

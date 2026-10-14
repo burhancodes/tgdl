@@ -1,4 +1,3 @@
-// Package store persists job state in SQLite.
 package store
 
 import (
@@ -12,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go driver, no cgo
+	_ "modernc.org/sqlite"
 )
 
-// Status is the lifecycle state of a job.
 type Status string
 
 const (
@@ -27,10 +25,8 @@ const (
 	StatusCancelled   Status = "cancelled"
 )
 
-// ErrNotFound is returned when a job does not exist.
 var ErrNotFound = errors.New("job not found")
 
-// Job is a persisted download job.
 type Job struct {
 	ID             string
 	ChatID         int64
@@ -47,13 +43,10 @@ type Job struct {
 	UpdatedAt      time.Time
 }
 
-// DownloadDir is the job's directory name beneath the downloads root.
 func (j *Job) DownloadDir() string { return "job_" + j.ID }
 
-// MirrorTempDirName is the temporary directory name for Pixeldrain archive mirroring.
 func (j *Job) MirrorTempDirName() string { return j.ID + "_pd_temp" }
 
-// Update carries optional field updates; nil pointers are left untouched.
 type Update struct {
 	Status       *Status
 	TotalFiles   *int
@@ -88,20 +81,24 @@ CREATE TABLE IF NOT EXISTS rename_plans (
     job_id TEXT PRIMARY KEY,
     plan TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS job_file_names (
+    job_id TEXT NOT NULL,
+    disk TEXT NOT NULL,
+    display TEXT NOT NULL,
+    PRIMARY KEY (job_id, disk)
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 `
 
-// Store is a SQLite-backed job repository. It is safe for concurrent use.
 type Store struct{ db *sql.DB }
 
-// Open opens (creating if needed) the database at path and applies migrations.
 func Open(ctx context.Context, path string) (*Store, error) {
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // serialise writers; avoids SQLITE_BUSY
+	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.migrate(ctx); err != nil {
 		_ = db.Close()
@@ -113,7 +110,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
-	// Legacy databases used an INTEGER primary key; convert to TEXT ids.
 	if typ, ok := s.idColumnType(ctx); ok && strings.Contains(strings.ToUpper(typ), "INT") {
 		slog.Info("migrating jobs table: INTEGER id -> TEXT")
 		tx, err := s.db.BeginTx(ctx, nil)
@@ -163,7 +159,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}
-	// Additive column migrations; "duplicate column" errors are expected.
 	for _, q := range []string{
 		`ALTER TABLE jobs ADD COLUMN split_large_files INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE jobs ADD COLUMN args TEXT`,
@@ -201,7 +196,6 @@ func fromEpoch(f float64) time.Time {
 	return time.Unix(int64(f), int64((f-float64(int64(f)))*1e9))
 }
 
-// CreateJob inserts a queued job with a unique random id.
 func (s *Store) CreateJob(ctx context.Context, chatID int64, url string, split bool, args string) (*Job, error) {
 	for attempt := 0; attempt < 16; attempt++ {
 		var b [4]byte
@@ -253,7 +247,6 @@ func scanJob(r scanner) (*Job, error) {
 	return &j, nil
 }
 
-// GetJob returns ErrNotFound if the job does not exist.
 func (s *Store) GetJob(ctx context.Context, id string) (*Job, error) {
 	j, err := scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobCols+` FROM jobs WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -267,7 +260,6 @@ func (s *Store) SetStatusMessage(ctx context.Context, id string, msgID int) erro
 	return err
 }
 
-// UpdateProgress applies the non-nil fields of u.
 func (s *Store) UpdateProgress(ctx context.Context, id string, u Update) error {
 	var sets []string
 	var vals []any
@@ -302,7 +294,6 @@ func (s *Store) UpdateProgress(ctx context.Context, id string, u Update) error {
 	return err
 }
 
-// SetStatus is a convenience wrapper for status-only updates.
 func (s *Store) SetStatus(ctx context.Context, id string, st Status) error {
 	return s.UpdateProgress(ctx, id, Update{Status: &st})
 }
@@ -329,7 +320,6 @@ func (s *Store) UploadedFilenames(ctx context.Context, jobID string) (map[string
 	return out, rows.Err()
 }
 
-// QueuedJobs returns queued jobs oldest-first (used to resume after restart).
 func (s *Store) QueuedJobs(ctx context.Context) ([]*Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobCols+` FROM jobs WHERE status = ? ORDER BY created_at`, StatusQueued)
 	if err != nil {
@@ -347,8 +337,6 @@ func (s *Store) QueuedJobs(ctx context.Context) ([]*Job, error) {
 	return out, rows.Err()
 }
 
-// ResumableJobs returns jobs that were queued or interrupted mid-flight,
-// oldest first, so they can be resumed after a restart.
 func (s *Store) ResumableJobs(ctx context.Context) ([]*Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobCols+` FROM jobs WHERE status IN (?, ?, ?) ORDER BY created_at`,
 		StatusQueued, StatusDownloading, StatusUploading)
@@ -367,7 +355,6 @@ func (s *Store) ResumableJobs(ctx context.Context) ([]*Job, error) {
 	return out, rows.Err()
 }
 
-// ActiveJobsForChat lists unfinished jobs in a chat (newest last).
 func (s *Store) ActiveJobsForChat(ctx context.Context, chatID int64) ([]*Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobCols+` FROM jobs WHERE chat_id = ? AND status IN (?, ?, ?) ORDER BY created_at`,
 		chatID, StatusQueued, StatusDownloading, StatusUploading)
@@ -386,13 +373,11 @@ func (s *Store) ActiveJobsForChat(ctx context.Context, chatID int64) ([]*Job, er
 	return out, rows.Err()
 }
 
-// SetArgs replaces the job's args JSON.
 func (s *Store) SetArgs(ctx context.Context, id, args string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET args = ?, updated_at = ? WHERE id = ?`, args, now(), id)
 	return err
 }
 
-// SetSplit updates the split-large-files flag.
 func (s *Store) SetSplit(ctx context.Context, id string, split bool) error {
 	v := 0
 	if split {
@@ -402,7 +387,6 @@ func (s *Store) SetSplit(ctx context.Context, id string, split bool) error {
 	return err
 }
 
-// IsTerminal reports whether the status is final.
 func (s Status) IsTerminal() bool {
 	return s == StatusDone || s == StatusFailed || s == StatusCancelled
 }
@@ -419,4 +403,26 @@ func (s *Store) GetRenamePlan(ctx context.Context, jobID string) (string, error)
 		return "", nil
 	}
 	return plan, err
+}
+
+func (s *Store) SaveFileName(ctx context.Context, jobID, disk, display string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO job_file_names (job_id, disk, display) VALUES (?, ?, ?)`, jobID, disk, display)
+	return err
+}
+
+func (s *Store) GetFileNames(ctx context.Context, jobID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT disk, display FROM job_file_names WHERE job_id = ?`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var disk, display string
+		if err := rows.Scan(&disk, &display); err != nil {
+			return nil, err
+		}
+		out[disk] = display
+	}
+	return out, rows.Err()
 }

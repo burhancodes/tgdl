@@ -87,9 +87,9 @@ func (renameSource) Match(r *Request) bool {
 }
 
 type renamePlanEntry struct {
-	FileID  string `json:"file_id"`
-	OldName string `json:"old_name"`
-	NewName string `json:"new_name"`
+	FileID  string          `json:"file_id"`
+	OldName string          `json:"old_name"`
+	NewName fsutil.FileName `json:"new_name"`
 }
 
 func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
@@ -101,9 +101,9 @@ func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
 		return fail("no files to rename")
 	}
 
-	planMap := make(map[string]string)
+	planMap := make(map[string]fsutil.FileName)
 	if stored, err := s.d.Store.GetRenamePlan(ctx, r.Job.ID); err == nil && stored != "" {
-		var names []string
+		var names []fsutil.FileName
 		if json.Unmarshal([]byte(stored), &names) == nil && len(names) > 0 {
 			for i, name := range names {
 				if i < len(files) {
@@ -111,33 +111,34 @@ func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
 				}
 			}
 		} else {
-			var entries []struct {
-				FileID  string `json:"file_id"`
-				NewName string `json:"new_name"`
-			}
-			if json.Unmarshal([]byte(stored), &entries) == nil {
-				for _, e := range entries {
-					planMap[e.FileID] = e.NewName
+			var strNames []string
+			if json.Unmarshal([]byte(stored), &strNames) == nil && len(strNames) > 0 {
+				for i, name := range strNames {
+					if i < len(files) {
+						planMap[files[i].FileID] = fsutil.NewFileName(name)
+					}
 				}
 			}
 		}
 	}
 
 	if len(planMap) == 0 {
-		var names []string
+		var names []fsutil.FileName
 		if len(r.Args.RenameNames) > 0 {
-			names = r.Args.RenameNames
+			for _, n := range r.Args.RenameNames {
+				names = append(names, fsutil.NewFileName(n))
+			}
 		} else if r.Args.RenameScheme != "" {
 			for _, f := range files {
 				finalName, _, _ := rename.Name(r.Args.RenameScheme, f.Name)
-				if finalName == "" {
-					finalName = f.Name
+				if finalName.Display == "" {
+					finalName = fsutil.NewFileName(f.Name)
 				}
 				names = append(names, finalName)
 			}
 		} else {
 			for _, f := range files {
-				names = append(names, f.Name)
+				names = append(names, fsutil.NewFileName(f.Name))
 			}
 		}
 
@@ -159,15 +160,19 @@ func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
 			return fail("cancelled")
 		}
 		targetName := planMap[f.FileID]
-		if targetName == "" {
-			targetName = f.Name
+		if targetName.Display == "" {
+			targetName = fsutil.NewFileName(f.Name)
 		}
-		if _, ok := uploaded[targetName]; ok {
-			r.St.setRenameProgress(f.Name, targetName, i+1)
+		if _, ok := uploaded[targetName.Disk]; ok {
+			r.St.setRenameProgress(f.Name, targetName.Display, i+1)
+			continue
+		}
+		if _, ok := uploaded[targetName.Display]; ok {
+			r.St.setRenameProgress(f.Name, targetName.Display, i+1)
 			continue
 		}
 		if _, ok := uploaded[f.Name]; ok {
-			r.St.setRenameProgress(f.Name, targetName, i+1)
+			r.St.setRenameProgress(f.Name, targetName.Display, i+1)
 			continue
 		}
 
@@ -207,19 +212,21 @@ func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
 			break
 		}
 
-		r.St.setRenameProgress(f.Name, targetName, i+1)
+		r.St.setRenameProgress(f.Name, targetName.Display, i+1)
 		dlPath, err := downloadTG(ctx, s.d, r.St, &f, r.Dest)
 		if err != nil {
 			slog.Warn("rename download failed", "file", f.Name, "err", err)
 			r.St.addSkip(f.Name, err.Error())
 			continue
 		}
-		destPath := filepath.Join(r.Dest, targetName)
+		destPath := filepath.Join(r.Dest, targetName.Disk)
 		if dlPath != destPath {
 			if err := os.Rename(dlPath, destPath); err != nil {
 				slog.Warn("rename os.Rename failed", "from", dlPath, "to", destPath, "err", err)
 			}
 		}
+		r.St.SetFileName(destPath, targetName)
+		_ = s.d.Store.SaveFileName(ctx, r.Job.ID, targetName.Disk, targetName.Display)
 	}
 
 	return dl.Result{OK: true, Files: listAll(r.Dest)}
@@ -230,9 +237,15 @@ func downloadTG(ctx context.Context, d *Deps, st *State, f *dl.TGFile, dest stri
 		return "", fmt.Errorf("no Telegram file attached to the job")
 	}
 	st.SetEngine("Telegram")
-	return d.TG.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dest, func(cur, total int64) {
+	dlPath, err := d.TG.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dest, func(cur, total int64) {
 		st.Bytes(dl.Progress{Current: cur, Total: total, File: f.Name})
 	})
+	if err == nil {
+		fn := fsutil.NewFileName(f.Name)
+		st.SetFileName(dlPath, fn)
+		_ = d.Store.SaveFileName(ctx, st.Job().ID, filepath.Base(dlPath), fn.Display)
+	}
+	return dlPath, err
 }
 
 type unzipSource struct{ d *Deps }
@@ -416,6 +429,10 @@ func (s directSource) Fetch(ctx context.Context, r *Request) dl.Result {
 	}
 	d := dl.NewDirect(s.d.Cfg, r.St.Bytes)
 	files, err := d.Download(ctx, r.Dest, raw)
+	for p, fn := range d.FileNames {
+		r.St.SetFileName(p, fn)
+		_ = s.d.Store.SaveFileName(ctx, r.Job.ID, fn.Disk, fn.Display)
+	}
 	return resultFromFiles(files, err)
 }
 

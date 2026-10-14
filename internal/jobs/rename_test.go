@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,11 +20,13 @@ import (
 
 type mockRenameTG struct {
 	tg.Client
-	mu         sync.Mutex
-	failFileID string
-	downloaded []string
-	uploaded   []string
-	onDownload func(fileID string)
+	mu            sync.Mutex
+	failFileID    string
+	downloaded    []string
+	uploaded      []string
+	uploadedNames []string
+	uploadedDisk  []string
+	onDownload    func(fileID string)
 }
 
 func (m *mockRenameTG) Download(ctx context.Context, f tg.FileRef, destDir string, cb tg.ProgressFunc) (string, error) {
@@ -49,11 +52,17 @@ func (m *mockRenameTG) Download(ctx context.Context, f tg.FileRef, destDir strin
 	return dest, nil
 }
 
-func (m *mockRenameTG) Upload(ctx context.Context, chatID int64, u tg.Upload) error {
+func (m *mockRenameTG) Upload(ctx context.Context, chatID int64, u tg.Upload) (tg.MessageRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.uploaded = append(m.uploaded, filepath.Base(u.Path))
-	return nil
+	name := u.FileName
+	if name == "" {
+		name = filepath.Base(u.Path)
+	}
+	m.uploadedNames = append(m.uploadedNames, name)
+	m.uploadedDisk = append(m.uploadedDisk, filepath.Base(u.Path))
+	return tg.MessageRef{ChatID: chatID, ID: 123}, nil
 }
 
 func (m *mockRenameTG) Send(ctx context.Context, chatID int64, html string, o tg.SendOpts) (tg.MessageRef, error) {
@@ -365,7 +374,7 @@ func TestRenameJob_PreviewMatchesAppliedNames(t *testing.T) {
 
 	var finalNames []string
 	for _, e := range previewEntries {
-		finalNames = append(finalNames, e.NewName)
+		finalNames = append(finalNames, e.NewName.Display)
 	}
 
 	args := dl.Args{
@@ -390,5 +399,49 @@ func TestRenameJob_PreviewMatchesAppliedNames(t *testing.T) {
 		if mock.uploaded[i] != name {
 			t.Errorf("[%d] uploaded=%q != preview=%q", i, mock.uploaded[i], name)
 		}
+	}
+}
+
+func TestRenameJob_EndToEnd_300CharName(t *testing.T) {
+	mock := &mockRenameTG{}
+	m, st, _, _ := setupRenameManager(t, mock)
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	longTyped := strings.Repeat("a", 296) + ".mkv"
+	files := []dl.TGFile{
+		{FileID: "1", Name: "orig.mkv", Size: 4},
+	}
+	args := dl.Args{
+		RenameNames: []string{longTyped},
+		RenameFiles: files,
+	}
+	argsJSON, _ := json.Marshal(args)
+
+	job, err := st.CreateJob(ctx, 100, "rename:batch", false, string(argsJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.run(job.ID)
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.uploadedNames) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(mock.uploadedNames))
+	}
+	if mock.uploadedNames[0] != longTyped {
+		t.Errorf("uploaded filename = %q, want %q", mock.uploadedNames[0], longTyped)
+	}
+	diskName := mock.uploadedDisk[0]
+	if len([]byte(diskName)) > 255 {
+		t.Errorf("disk file exceeds 255 bytes: %d", len([]byte(diskName)))
 	}
 }

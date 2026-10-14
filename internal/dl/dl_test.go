@@ -1,8 +1,16 @@
 package dl
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/burhanverse/tgdl/internal/config"
 )
 
 func TestParseArgsLegacyAndJSON(t *testing.T) {
@@ -102,5 +110,45 @@ func TestSanitizeExtraArgs(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) {
 			t.Errorf("SanitizeExtraArgs(%v) = %v, want %v", c.input, got, c.want)
 		}
+	}
+}
+
+func TestDirect_400CharacterName(t *testing.T) {
+	longName := strings.Repeat("a", 396) + ".mkv"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="`+longName+`"`)
+		w.Header().Set("Content-Type", "video/x-matroska")
+		_, _ = w.Write([]byte("test-content"))
+	}))
+	defer ts.Close()
+
+	dest := t.TempDir()
+	cfg := &config.Config{AllowPrivateURLs: true}
+	d := NewDirect(cfg, nil)
+
+	files, err := d.Download(context.Background(), dest, ts.URL)
+	if err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	diskName := filepath.Base(files[0])
+	if len([]byte(diskName)) > 255 {
+		t.Errorf("disk filename exceeds 255 bytes: %d", len([]byte(diskName)))
+	}
+	fn, ok := d.FileNames[files[0]]
+	if !ok {
+		t.Fatalf("missing FileName mapping for %s", files[0])
+	}
+	if fn.Display != longName {
+		t.Errorf("got Display %q, want %q", fn.Display, longName)
+	}
+	if fn.Disk != diskName {
+		t.Errorf("got Disk %q, want %q", fn.Disk, diskName)
+	}
+	b, err := os.ReadFile(files[0])
+	if err != nil || string(b) != "test-content" {
+		t.Errorf("unexpected file content: %s, err: %v", string(b), err)
 	}
 }

@@ -42,6 +42,7 @@ type ProgressFunc func(current, total int64)
 
 type Upload struct {
 	Path      string
+	FileName  string
 	Caption   string
 	Kind      Kind
 	Thumb     string
@@ -54,10 +55,11 @@ type Upload struct {
 }
 
 type GroupItem struct {
-	Path    string
-	Caption string
-	Video   bool
-	Photo   bool
+	Path     string
+	FileName string
+	Caption  string
+	Video    bool
+	Photo    bool
 }
 
 type FileRef struct {
@@ -75,8 +77,8 @@ type Client interface {
 	Pin(ctx context.Context, ref MessageRef) error
 	Unpin(ctx context.Context, ref MessageRef) error
 	Answer(ctx context.Context, callbackID, text string, alert bool) error
-	Upload(ctx context.Context, chatID int64, u Upload) error
-	UploadGroup(ctx context.Context, chatID int64, items []GroupItem) error
+	Upload(ctx context.Context, chatID int64, u Upload) (MessageRef, error)
+	UploadGroup(ctx context.Context, chatID int64, items []GroupItem) ([]MessageRef, error)
 	Download(ctx context.Context, f FileRef, destDir string, progress ProgressFunc) (string, error)
 	SetCommands(ctx context.Context, cmds []Command) error
 	SetChatCommands(ctx context.Context, chatID int64, cmds []Command) error

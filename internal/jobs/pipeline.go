@@ -149,13 +149,13 @@ func (m *Manager) uploadSplitGroup(st *State, files []string) {
 	defer m.ulSem.Release(1)
 	for _, f := range files {
 		rel, _ := filepath.Rel(st.Dest, f)
-		st.beginUpload(rel, filepath.Base(f))
+		st.beginUpload(rel, st.FileName(f).Display)
 	}
 	onUp := func(f string) {
 		rel, _ := filepath.Rel(st.Dest, f)
 		m.afterUpload(st, f, rel)
 	}
-	asDoc, err := m.up.UploadGroup(st.ctx, chat, files, st.asDocFlag(), st.UploadProgress, onUp)
+	asDoc, err := m.up.UploadGroupWithNames(st.ctx, chat, files, st.FileNames(), st.asDocFlag(), st.UploadProgress, onUp)
 	st.setAsDoc(asDoc)
 	for _, f := range files {
 		rel, _ := filepath.Rel(st.Dest, f)
@@ -323,9 +323,10 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 	if err := m.ulSem.Acquire(st.ctx, 1); err != nil {
 		return
 	}
-	st.beginUpload(key, name)
+	fn := st.FileName(f)
+	st.beginUpload(key, fn.Display)
 	m.setStatus(st, "uploading")
-	asDoc, err := m.up.Upload(st.ctx, job.ChatID, f, st.asDocFlag(), st.UploadProgress)
+	asDoc, err := m.up.Upload(st.ctx, job.ChatID, f, st.asDocFlag(), st.UploadProgress, fn)
 	m.ulSem.Release(1)
 	st.endUpload(key)
 	st.setAsDoc(asDoc)
@@ -368,25 +369,32 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 		if files := fsutil.ListUploadable(st.Extract); len(files) > 0 {
 			if len(args.RenameNames) > 0 {
 				st.setRenameInfo("", len(files))
-				for i, newName := range args.RenameNames {
-					if i < len(files) && newName != "" && newName != filepath.Base(files[i]) {
+				for i, nameStr := range args.RenameNames {
+					if i < len(files) && nameStr != "" {
+						fn := fsutil.NewFileName(nameStr)
 						oldP := files[i]
-						newP := filepath.Join(filepath.Dir(oldP), newName)
+						newP := filepath.Join(filepath.Dir(oldP), fn.Disk)
 						if err := os.Rename(oldP, newP); err == nil {
 							files[i] = newP
 						}
+						st.SetFileName(files[i], fn)
+						_ = m.d.Store.SaveFileName(context.Background(), job.ID, fn.Disk, fn.Display)
 					}
 				}
 			} else if args.RenameScheme != "" {
 				st.setRenameInfo(args.RenameScheme, len(files))
 				for i, f := range files {
-					newName, _, _ := rename.Name(args.RenameScheme, filepath.Base(f))
-					if newName != "" && newName != filepath.Base(f) {
+					fn, _, _ := rename.Name(args.RenameScheme, filepath.Base(f))
+					if fn.Disk != "" && fn.Disk != filepath.Base(f) {
 						oldP := f
-						newP := filepath.Join(filepath.Dir(oldP), newName)
+						newP := filepath.Join(filepath.Dir(oldP), fn.Disk)
 						if err := os.Rename(oldP, newP); err == nil {
 							files[i] = newP
 						}
+					}
+					if fn.Display != "" {
+						st.SetFileName(files[i], fn)
+						_ = m.d.Store.SaveFileName(context.Background(), job.ID, fn.Disk, fn.Display)
 					}
 				}
 			}
@@ -503,7 +511,14 @@ func (m *Manager) extract(st *State, path, name string) error {
 				}
 				defer m.heavySem.Release(1)
 			}
-			return archive.Extract(st.ctx, path, st.Extract, st.Args().Password, limits)
+			err := archive.Extract(st.ctx, path, st.Extract, st.Args().Password, limits)
+			if err == nil {
+				for disk, fn := range archive.ListArchiveFileNames(path, st.Args().Password) {
+					st.SetFileName(disk, fn)
+					_ = m.d.Store.SaveFileName(context.Background(), job.ID, disk, fn.Display)
+				}
+			}
+			return err
 		}()
 		if err == nil || !errors.Is(err, archive.ErrPasswordRequired) {
 			return err

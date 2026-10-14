@@ -31,7 +31,7 @@ func main() {
 	api := tg.NewBotAPI(nil, "fake-token")
 	api.BaseURL = srv.URL
 
-	err := api.Upload(context.Background(), 123456, tg.Upload{
+	_, err := api.Upload(context.Background(), 123456, tg.Upload{
 		Path: filePath,
 		Kind: tg.KindDocument,
 	})
@@ -40,11 +40,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Read peak RSS from /proc/self/status VmHWM
 	vmHWMKB := getVmHWMKB()
 	fmt.Printf("Peak RSS (VmHWM): %d KiB (%.2f MiB)\n", vmHWMKB, float64(vmHWMKB)/1024)
 
-	// Threshold: 200 MiB (204800 KiB)
 	const maxKB = 200 * 1024
 	if vmHWMKB > maxKB {
 		fmt.Fprintf(os.Stderr, "FAIL: peak RSS %d KiB exceeded 200 MiB limit (%d KiB)\n", vmHWMKB, maxKB)

@@ -18,7 +18,6 @@ var (
 	sysAt    time.Time
 )
 
-// ReadSystemStats returns a cached (≤2s old) host resource snapshot.
 func ReadSystemStats() SystemStats {
 	sysMu.Lock()
 	defer sysMu.Unlock()

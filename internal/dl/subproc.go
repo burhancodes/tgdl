@@ -183,6 +183,7 @@ func (r *Runner) gdlCmd(url, dest string, o RunOpts) *exec.Cmd {
 		"-o", "extractor.user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.82 Safari/537.36",
 		"-o", "output.skip=true",
 		"-o", "downloader.part=true",
+		"-o", "extractor.filename={filename[:200]}.{extension}",
 	)
 	if pacing.ParseSpeedLimit(r.cfg.GlobalSpeedLimit) > 0 {
 		args = append(args, "--limit-rate", r.cfg.GlobalSpeedLimit)

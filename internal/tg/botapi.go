@@ -666,10 +666,10 @@ func (a *BotAPI) convertFileURIsToMultipart(method string, fields map[string]str
 	return newFiles, newFields, true
 }
 
-func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
+func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) (MessageRef, error) {
 	st, err := os.Stat(u.Path)
 	if err != nil {
-		return err
+		return MessageRef{}, err
 	}
 
 	var files []filePart
@@ -725,23 +725,31 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 		fields["disable_content_type_detection"] = "true"
 	}
 
+	uploadFileName := u.FileName
+	if uploadFileName == "" {
+		uploadFileName = filepath.Base(u.Path)
+	}
+
 	isLocalFile := false
-	if fileURL, ok := a.localDirMap.FileURL(u.Path); ok {
-		isLocalFile = true
-		fields[fieldName] = fileURL
-		if u.Progress != nil {
-			u.Progress(0, st.Size())
+	if uploadFileName == filepath.Base(u.Path) {
+		if fileURL, ok := a.localDirMap.FileURL(u.Path); ok {
+			isLocalFile = true
+			fields[fieldName] = fileURL
+			if u.Progress != nil {
+				u.Progress(0, st.Size())
+			}
 		}
-	} else {
+	}
+	if !isLocalFile {
 		f, err := os.Open(u.Path)
 		if err != nil {
-			return err
+			return MessageRef{}, err
 		}
 		filesToClose = append(filesToClose, f)
 		pr := &progressReader{f: f, total: st.Size(), cb: u.Progress, ctx: ctx}
 		files = append(files, filePart{
 			fieldName: fieldName,
-			fileName:  filepath.Base(u.Path),
+			fileName:  uploadFileName,
 			reader:    pr,
 			size:      st.Size(),
 		})
@@ -781,16 +789,20 @@ func (a *BotAPI) Upload(ctx context.Context, chatID int64, u Upload) error {
 		}
 	}
 
-	err = a.postMultipart(ctx, method, fields, files, nil)
+	var msg models.Message
+	err = a.postMultipart(ctx, method, fields, files, &msg)
 	if err == nil && isLocalFile && u.Progress != nil {
 		u.Progress(st.Size(), st.Size())
 	}
-	return err
+	if err != nil {
+		return MessageRef{}, err
+	}
+	return MessageRef{ChatID: chatID, ID: msg.ID}, nil
 }
 
-func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupItem) error {
+func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupItem) ([]MessageRef, error) {
 	if len(items) < 2 || len(items) > 10 {
-		return fmt.Errorf("album needs 2-10 items, got %d", len(items))
+		return nil, fmt.Errorf("album needs 2-10 items, got %d", len(items))
 	}
 	var files []filePart
 	var filesToClose []io.Closer
@@ -804,7 +816,7 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 	for i, it := range items {
 		st, err := os.Stat(it.Path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		mediaType := "document"
@@ -826,19 +838,27 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 			itemObj.ParseMode = "HTML"
 		}
 
-		if fileURL, ok := a.localDirMap.FileURL(it.Path); ok {
-			itemObj.Media = fileURL
-		} else {
+		fn := it.FileName
+		if fn == "" {
+			fn = filepath.Base(it.Path)
+		}
+
+		if fn == filepath.Base(it.Path) {
+			if fileURL, ok := a.localDirMap.FileURL(it.Path); ok {
+				itemObj.Media = fileURL
+			}
+		}
+		if itemObj.Media == "" {
 			name := fmt.Sprintf("file%d", i)
 			itemObj.Media = "attach://" + name
 			f, err := os.Open(it.Path)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			filesToClose = append(filesToClose, f)
 			files = append(files, filePart{
 				fieldName: name,
-				fileName:  filepath.Base(it.Path),
+				fileName:  fn,
 				reader:    f,
 				size:      st.Size(),
 			})
@@ -848,7 +868,7 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 
 	mediaJSON, err := json.Marshal(media)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fields := map[string]string{
@@ -857,7 +877,16 @@ func (a *BotAPI) UploadGroup(ctx context.Context, chatID int64, items []GroupIte
 		"media":                string(mediaJSON),
 	}
 
-	return a.postMultipart(ctx, "sendMediaGroup", fields, files, nil)
+	var msgs []models.Message
+	err = a.postMultipart(ctx, "sendMediaGroup", fields, files, &msgs)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]MessageRef, len(msgs))
+	for i, m := range msgs {
+		refs[i] = MessageRef{ChatID: chatID, ID: m.ID}
+	}
+	return refs, nil
 }
 
 func (a *BotAPI) SetDataDir(dir string) { a.dataDir = dir }

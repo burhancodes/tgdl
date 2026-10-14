@@ -65,7 +65,7 @@ func (a *App) handleRenameSingle(ctx context.Context, m *models.Message, toks []
 
 	target := "rename:" + file.Name
 	args := dl.Args{
-		RenameNames: []string{finalName},
+		RenameNames: []string{finalName.Display},
 		RenameFiles: []dl.TGFile{*file},
 		AsDoc:       isDoc,
 	}
@@ -81,7 +81,7 @@ func (a *App) handlePendingSingleName(ctx context.Context, m *models.Message, pe
 	}
 	target := "rename:" + pending.File.Name
 	args := dl.Args{
-		RenameNames: []string{finalName},
+		RenameNames: []string{finalName.Display},
 		RenameFiles: []dl.TGFile{pending.File},
 		AsDoc:       pending.AsDoc,
 	}
@@ -121,20 +121,12 @@ func (a *App) handleBatchNamesMessage(ctx context.Context, m *models.Message, se
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "<b>Rename Preview</b> (%d files)\n\n", len(plan))
-	limit := 30
-	if len(plan) < limit {
-		limit = len(plan)
-	}
-	for i := 0; i < limit; i++ {
-		entry := plan[i]
-		fmt.Fprintf(&b, "<code>%s</code> → <code>%s</code>", status.Esc(entry.OldName), status.Esc(entry.NewName))
+	for _, entry := range plan {
+		fmt.Fprintf(&b, "<code>%s</code> → <code>%s</code>", status.Esc(entry.OldName), status.Esc(entry.NewName.Display))
 		if len(entry.Notes) > 0 {
 			fmt.Fprintf(&b, " <i>(%s)</i>", status.Esc(strings.Join(entry.Notes, ", ")))
 		}
 		b.WriteByte('\n')
-	}
-	if len(plan) > 30 {
-		fmt.Fprintf(&b, "…and %d more\n", len(plan)-30)
 	}
 
 	kb := tg.Keyboard{
@@ -143,7 +135,14 @@ func (a *App) handleBatchNamesMessage(ctx context.Context, m *models.Message, se
 			tg.Button{Text: "Cancel", Data: "rename:cancel"},
 		},
 	}
-	a.replyKB(ctx, m, b.String(), kb)
+	chunks := status.Fit(b.String(), 4096)
+	for i, chunk := range chunks {
+		if i == len(chunks)-1 {
+			a.replyKB(ctx, m, chunk, kb)
+		} else {
+			a.reply(ctx, m, chunk)
+		}
+	}
 }
 
 func (a *App) cbRename(ctx context.Context, b *tgbot.Bot, u *models.Update) {
@@ -208,24 +207,18 @@ func (a *App) cbRenamePreview(ctx context.Context, q *models.CallbackQuery, sess
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "<b>Rename Preview</b> (%d files)\n\n", len(plan))
-	limit := 30
-	if len(plan) < limit {
-		limit = len(plan)
-	}
-	for i := 0; i < limit; i++ {
-		entry := plan[i]
-		fmt.Fprintf(&b, "<code>%s</code> → <code>%s</code>", status.Esc(entry.OldName), status.Esc(entry.NewName))
+	for _, entry := range plan {
+		fmt.Fprintf(&b, "<code>%s</code> → <code>%s</code>", status.Esc(entry.OldName), status.Esc(entry.NewName.Display))
 		if len(entry.Notes) > 0 {
 			fmt.Fprintf(&b, " <i>(%s)</i>", status.Esc(strings.Join(entry.Notes, ", ")))
 		}
 		b.WriteByte('\n')
 	}
-	if len(plan) > 30 {
-		fmt.Fprintf(&b, "…and %d more\n", len(plan)-30)
-	}
 
 	_ = a.tg.Answer(ctx, q.ID, "", false)
-	_, _ = a.tg.Send(ctx, sess.ChatID, b.String(), tg.SendOpts{})
+	for _, chunk := range status.Fit(b.String(), 4096) {
+		_, _ = a.tg.Send(ctx, sess.ChatID, chunk, tg.SendOpts{})
+	}
 }
 
 func (a *App) cbRenameApply(ctx context.Context, q *models.CallbackQuery, msg *models.Message, sess *RenameSession) {
@@ -250,7 +243,7 @@ func (a *App) cbRenameApply(ctx context.Context, q *models.CallbackQuery, msg *m
 
 	finalNames := make([]string, len(plan))
 	for i, p := range plan {
-		finalNames[i] = p.NewName
+		finalNames[i] = p.NewName.Display
 	}
 
 	count := len(sess.Files)

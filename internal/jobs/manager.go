@@ -312,6 +312,11 @@ func (m *Manager) run(id string) {
 	if m.d.Cfg.HasMaxTotalDownloads {
 		st.SetMaxBytes(m.d.Cfg.MaxTotalDownloadsB)
 	}
+	if savedNames, err := m.d.Store.GetFileNames(m.root, id); err == nil {
+		for disk, display := range savedNames {
+			st.SetFileName(disk, fsutil.FileName{Display: display, Disk: disk})
+		}
+	}
 
 	m.mu.Lock()
 	if _, exists := m.states[id]; exists {
@@ -415,7 +420,9 @@ func (m *Manager) render(st *State, force bool) {
 		return
 	}
 	text := m.Render(st)
-	if text == last && !force {
+	chunks := status.Fit(text, 4096)
+	mainText := chunks[0]
+	if mainText == last && !force {
 		return
 	}
 	if !force {
@@ -433,7 +440,7 @@ func (m *Manager) render(st *State, force bool) {
 	if err := m.lim.Acquire(ctx, ref.ChatID); err != nil {
 		return
 	}
-	err := m.d.TG.Edit(ctx, ref, text, tg.SendOpts{Keyboard: cancelKeyboard(st.Job().ID)})
+	err := m.d.TG.Edit(ctx, ref, mainText, tg.SendOpts{Keyboard: cancelKeyboard(st.Job().ID)})
 	m.lim.RecordCallDone(ref.ChatID)
 	if secs, ok := tg.IsFlood(err); ok {
 		m.lim.NotifyFloodWait(secs, ref.ChatID)
@@ -444,9 +451,19 @@ func (m *Manager) render(st *State, force bool) {
 		return
 	}
 	st.mu.Lock()
-	st.lastText = text
+	st.lastText = mainText
 	st.lastEditAt = time.Now()
+	needFollowUp := len(chunks) > 1 && !st.followUpSent
+	if needFollowUp {
+		st.followUpSent = true
+	}
 	st.mu.Unlock()
+
+	if needFollowUp {
+		for _, extra := range chunks[1:] {
+			m.send(st, extra, tg.SendOpts{})
+		}
+	}
 }
 
 func (m *Manager) send(st *State, html string, o tg.SendOpts) tg.MessageRef {
@@ -762,14 +779,14 @@ func (m *Manager) finalize(st *State) {
 		return
 	case fatal != "":
 		final = store.StatusFailed
-		text = "<b>Job failed</b>: " + status.Code(status.Short(fatal, 500))
+		text = "<b>Job failed</b>: " + status.Code(fatal)
 	case !res.OK && sent == 0:
 		final = store.StatusFailed
 		msg := res.ErrorTail
 		if msg == "" {
 			msg = "Download failed."
 		}
-		text = fmt.Sprintf("<b>Job #%s failed</b>\n<blockquote>%s</blockquote>", status.Esc(job.ID), status.Code(status.Short(tailChars(msg, 1500), 800)))
+		text = fmt.Sprintf("<b>Job #%s failed</b>\n<blockquote>%s</blockquote>", status.Esc(job.ID), status.Code(msg))
 	default:
 		final = store.StatusDone
 		text = m.summary(st, sent, skipped)
@@ -788,18 +805,20 @@ func (m *Manager) finalize(st *State) {
 		slog.Error("persist final state failed", "job", job.ID, "err", err)
 	}
 
+	chunks := status.Fit(text, 4096)
+	mainChunk := chunks[0]
 	st.mu.Lock()
 	ref := st.msg
 	st.mu.Unlock()
 	if ref.Valid() {
 		_ = m.lim.Acquire(ctx, ref.ChatID)
-		err := m.d.TG.Edit(ctx, ref, text, tg.SendOpts{})
+		err := m.d.TG.Edit(ctx, ref, mainChunk, tg.SendOpts{})
 		m.lim.RecordCallDone(ref.ChatID)
 		if secs, ok := tg.IsFlood(err); ok {
 			m.lim.NotifyFloodWait(secs, ref.ChatID)
 		}
 		if err != nil {
-			m.send(st, text, tg.SendOpts{})
+			m.send(st, mainChunk, tg.SendOpts{})
 		}
 		if m.d.Cfg == nil || m.d.Cfg.PinStatusMessage {
 			if err := m.d.TG.Unpin(ctx, ref); err != nil {
@@ -807,7 +826,10 @@ func (m *Manager) finalize(st *State) {
 			}
 		}
 	} else {
-		m.send(st, text, tg.SendOpts{})
+		m.send(st, mainChunk, tg.SendOpts{})
+	}
+	for _, chunk := range chunks[1:] {
+		m.send(st, chunk, tg.SendOpts{})
 	}
 }
 
@@ -818,11 +840,7 @@ func (m *Manager) summary(st *State, sent, skipped int) string {
 		fmt.Fprintf(&b, "<b>Job #%s done.</b> Renamed %d, skipped %d.", status.Esc(job.ID), sent, skipped)
 		if names := st.renamedFiles(); len(names) > 0 {
 			b.WriteString("\n\n<b>Renamed files</b>")
-			for i, name := range names {
-				if i == 20 {
-					fmt.Fprintf(&b, "\n…and %d more", len(names)-20)
-					break
-				}
+			for _, name := range names {
 				fmt.Fprintf(&b, "\n• %s", status.Code(name))
 			}
 		}
@@ -845,12 +863,12 @@ func (m *Manager) summary(st *State, sent, skipped int) string {
 	}
 	if sk := st.skips(); len(sk) > 0 {
 		b.WriteString("\n\n<b>Skipped</b>")
-		for i, s := range sk {
-			if i == 20 {
-				fmt.Fprintf(&b, "\n…and %d more", len(sk)-20)
-				break
+		for _, s := range sk {
+			if s.Reason != "" {
+				fmt.Fprintf(&b, "\n• %s (%s)", status.Code(s.Name), status.Esc(s.Reason))
+			} else {
+				fmt.Fprintf(&b, "\n• %s", status.Code(s.Name))
 			}
-			fmt.Fprintf(&b, "\n• %s (%s)", status.Code(s.Name), status.Esc(status.Short(s.Reason, 80)))
 		}
 	}
 	if links := st.pdLinkList(); len(links) > 0 {

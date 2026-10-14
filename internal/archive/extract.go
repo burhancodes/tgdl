@@ -42,10 +42,8 @@ func init() {
 	}
 }
 
-// IsArchiveExt reports whether path has a recognised archive extension.
 func IsArchiveExt(path string) bool { return archiveExts[strings.ToLower(filepath.Ext(path))] }
 
-// ErrPasswordRequired signals a missing or incorrect archive password.
 var ErrPasswordRequired = errors.New("archive password required or incorrect")
 
 var passwordHints = []string{"password", "incorrect", "encrypted", "bad password", "cannot decrypt", "crc failed",
@@ -93,10 +91,6 @@ func runTool(ctx context.Context, name string, args ...string) (string, int, err
 	return tw.String(), 0, err
 }
 
-// Extract extracts archivePath into dest. It returns ErrPasswordRequired when
-// the archive is encrypted and the password is missing or wrong. The
-// extraction order mirrors robustness: 7z (handles almost everything) →
-// unrar → unzip → pure-Go zip/tar fallbacks.
 func Extract(ctx context.Context, archivePath, dest, password string, limits ...ExtractLimits) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
@@ -348,6 +342,11 @@ func extractZip(path, dest string) error {
 			slog.Warn("zip-slip attempt skipped", "member", f.Name, "archive", filepath.Base(path))
 			continue
 		}
+		base := filepath.Base(f.Name)
+		fn := fsutil.NewFileName(base)
+		if fn.Disk != base {
+			target = filepath.Join(filepath.Dir(target), fn.Disk)
+		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
@@ -414,6 +413,11 @@ func extractTar(path, dest string) error {
 			slog.Warn("tar path traversal skipped", "member", h.Name)
 			continue
 		}
+		base := filepath.Base(h.Name)
+		fn := fsutil.NewFileName(base)
+		if fn.Disk != base {
+			target = filepath.Join(filepath.Dir(target), fn.Disk)
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -436,4 +440,75 @@ func extractTar(path, dest string) error {
 			}
 		}
 	}
+}
+
+func ListArchiveFileNames(archivePath, password string) map[string]fsutil.FileName {
+	out := make(map[string]fsutil.FileName)
+	if zr, err := zip.OpenReader(archivePath); err == nil {
+		defer zr.Close()
+		for _, f := range zr.File {
+			base := filepath.Base(f.Name)
+			if len([]byte(base)) > 255 {
+				fn := fsutil.NewFileName(base)
+				out[fn.Disk] = fn
+			}
+		}
+		return out
+	}
+
+	if f, err := os.Open(archivePath); err == nil {
+		defer f.Close()
+		var r io.Reader = f
+		lower := strings.ToLower(archivePath)
+		switch {
+		case strings.HasSuffix(lower, ".gz") || strings.HasSuffix(lower, ".tgz"):
+			if gz, err := gzip.NewReader(f); err == nil {
+				defer gz.Close()
+				r = gz
+			}
+		case strings.HasSuffix(lower, ".bz2") || strings.HasSuffix(lower, ".tbz2"):
+			r = bzip2.NewReader(f)
+		}
+		tr := tar.NewReader(r)
+		for {
+			h, err := tr.Next()
+			if err != nil {
+				break
+			}
+			base := filepath.Base(h.Name)
+			if len([]byte(base)) > 255 {
+				fn := fsutil.NewFileName(base)
+				out[fn.Disk] = fn
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+
+	if sz := which("7z", "7za", "7zr"); sz != "" {
+		args := []string{"l", "-slt", "-ba"}
+		if password != "" {
+			args = append(args, "-p"+password)
+		} else {
+			args = append(args, "-p-")
+		}
+		args = append(args, archivePath)
+		output, code, err := runTool(context.Background(), sz, args...)
+		if err == nil && code == 0 {
+			lines := strings.Split(output, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "Path = ") {
+					p := strings.TrimPrefix(line, "Path = ")
+					base := filepath.Base(p)
+					if len([]byte(base)) > 255 {
+						fn := fsutil.NewFileName(base)
+						out[fn.Disk] = fn
+					}
+				}
+			}
+		}
+	}
+	return out
 }

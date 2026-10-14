@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/burhanverse/tgdl/internal/dl"
+	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
@@ -71,6 +73,7 @@ type State struct {
 	renamedList  []string
 
 	currentUpload string
+	followUpSent  bool
 	uploadPct     float64
 	uploadSpeed   float64
 	upSpeedAt     time.Time
@@ -99,7 +102,8 @@ type State struct {
 	dlOnce, ulOnce sync.Once
 	trigger        chan struct{}
 
-	sess *sessions
+	sess      *sessions
+	fileNames map[string]fsutil.FileName
 }
 
 func (s *State) SetMaxBytes(b int64) {
@@ -128,8 +132,9 @@ func newState(job *store.Job, dest, extract string, parent context.Context) *Sta
 		uploaded: map[string]struct{}{}, uploading: map[string]struct{}{},
 		failed: map[string]struct{}{}, splitParts: map[string]struct{}{},
 		downloaderDone: make(chan struct{}), uploaderDone: make(chan struct{}),
-		trigger: make(chan struct{}, 1),
-		sess:    newSessions(),
+		trigger:   make(chan struct{}, 1),
+		sess:      newSessions(),
+		fileNames: make(map[string]fsutil.FileName),
 	}
 }
 
@@ -289,6 +294,7 @@ func (s *State) markFailed(rel string) { s.mu.Lock(); s.failed[rel] = struct{}{}
 func (s *State) beginUpload(rel, name string) {
 	s.mu.Lock()
 	s.uploading[rel], s.currentUpload = struct{}{}, name
+	s.followUpSent = false
 	s.uploadPct, s.uploadSpeed = 0, 0
 	s.upSpeedAt, s.upSpeedB = time.Time{}, 0
 	s.mu.Unlock()
@@ -488,4 +494,41 @@ func (s *State) renamedFiles() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.renamedList...)
+}
+
+func (s *State) SetFileName(key string, fn fsutil.FileName) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fileNames == nil {
+		s.fileNames = make(map[string]fsutil.FileName)
+	}
+	s.fileNames[key] = fn
+	s.fileNames[fn.Disk] = fn
+	s.fileNames[fn.Display] = fn
+}
+
+func (s *State) FileName(key string) fsutil.FileName {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fileNames != nil {
+		if fn, ok := s.fileNames[key]; ok {
+			return fn
+		}
+		base := filepath.Base(key)
+		if fn, ok := s.fileNames[base]; ok {
+			return fn
+		}
+	}
+	base := filepath.Base(key)
+	return fsutil.FileName{Display: base, Disk: base}
+}
+
+func (s *State) FileNames() map[string]fsutil.FileName {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]fsutil.FileName, len(s.fileNames))
+	for k, v := range s.fileNames {
+		out[k] = v
+	}
+	return out
 }

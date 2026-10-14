@@ -1,8 +1,9 @@
-// Package fsutil holds filesystem helpers: natural ordering, ignore rules,
-// magic-byte extension repair and safe path handling.
 package fsutil
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,9 +14,113 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/h2non/filetype"
 )
+
+type FileName struct {
+	Display string `json:"display"`
+	Disk    string `json:"disk"`
+}
+
+func (fn *FileName) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*fn = NewFileName(s)
+		return nil
+	}
+	type raw FileName
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	*fn = FileName(r)
+	if fn.Disk == "" {
+		fn.Disk = fn.Display
+	}
+	return nil
+}
+
+func (fn FileName) MarshalJSON() ([]byte, error) {
+	type raw FileName
+	return json.Marshal(raw(fn))
+}
+
+func NewFileName(display string) FileName {
+	cleaned := SanitizeFilename(display)
+	if len([]byte(cleaned)) <= 255 && !isReservedDiskName(cleaned) {
+		return FileName{Display: display, Disk: cleaned}
+	}
+	h := sha256.Sum256([]byte(display))
+	hash8 := hex.EncodeToString(h[:4])
+	tag := "~" + hash8
+
+	ext := filepath.Ext(cleaned)
+	if len([]byte(ext)) > 100 {
+		ext = TruncateUTF8(ext, 100)
+	}
+	stem := strings.TrimSuffix(cleaned, ext)
+	maxStemBytes := 255 - len([]byte(tag)) - len([]byte(ext))
+	if maxStemBytes < 0 {
+		ext = ""
+		maxStemBytes = 255 - len([]byte(tag))
+	}
+	cutStem := TruncateUTF8(stem, maxStemBytes)
+	cutStem = strings.TrimRight(cutStem, " .")
+	disk := cutStem + tag + ext
+	if isReservedDiskName(disk) || len([]byte(disk)) > 255 {
+		disk = "file" + tag + ext
+	}
+	return FileName{
+		Display: display,
+		Disk:    disk,
+	}
+}
+
+func isReservedDiskName(name string) bool {
+	t := strings.Trim(name, " .")
+	return t == "" || t == "." || t == ".."
+}
+
+func TruncateUTF8(s string, maxBytes int) string {
+	if len([]byte(s)) <= maxBytes {
+		return s
+	}
+	if maxBytes <= 0 {
+		return ""
+	}
+	b := []byte(s)
+	if maxBytes > len(b) {
+		maxBytes = len(b)
+	}
+	for maxBytes > 0 && !utf8.RuneStart(b[maxBytes]) {
+		maxBytes--
+	}
+	return string(b[:maxBytes])
+}
+
+func TruncateMiddle(s string, maxChars int) string {
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s
+	}
+	if maxChars <= 3 {
+		return string(runes[:maxChars])
+	}
+	ext := filepath.Ext(s)
+	extRunes := []rune(ext)
+	if len(extRunes) >= maxChars-3 {
+		keepHead := (maxChars - 1) / 2
+		keepTail := maxChars - 1 - keepHead
+		return string(runes[:keepHead]) + "…" + string(runes[len(runes)-keepTail:])
+	}
+	stemRunes := []rune(strings.TrimSuffix(s, ext))
+	availStem := maxChars - len(extRunes) - 1
+	headCount := (availStem + 1) / 2
+	tailCount := availStem - headCount
+	return string(stemRunes[:headCount]) + "…" + string(stemRunes[len(stemRunes)-tailCount:]) + ext
+}
 
 type FileInfo struct {
 	Path    string
@@ -23,7 +128,6 @@ type FileInfo struct {
 	ModTime time.Time
 }
 
-// NaturalLess compares strings so that "file2" sorts before "file10".
 func NaturalLess(a, b string) bool {
 	a, b = strings.ToLower(a), strings.ToLower(b)
 	i, j := 0, 0
@@ -194,7 +298,6 @@ func (k *sortKey) less(o *sortKey) bool {
 	return len(k.parts) < len(o.parts)
 }
 
-// NaturalPathLess compares paths component by component using NaturalLess.
 func NaturalPathLess(a, b string) bool {
 	pa := strings.Split(filepath.ToSlash(a), "/")
 	pb := strings.Split(filepath.ToSlash(b), "/")
@@ -212,7 +315,6 @@ type pathWithKey struct {
 	path string
 }
 
-// SortNatural sorts paths in place using hierarchical natural ordering with precomputed keys.
 func SortNatural(paths []string) {
 	if len(paths) <= 1 {
 		return
@@ -234,7 +336,6 @@ type fileInfoWithKey struct {
 	info FileInfo
 }
 
-// SortNaturalFileInfo sorts FileInfo slice in place using hierarchical natural ordering with precomputed keys.
 func SortNaturalFileInfo(infos []FileInfo) {
 	if len(infos) <= 1 {
 		return
@@ -257,13 +358,11 @@ var (
 	ignoredExts  = map[string]bool{".part": true, ".crdownload": true, ".torrent": true}
 )
 
-// ShouldIgnoreName checks if a base file name is ignored without stat.
 func ShouldIgnoreName(base string) bool {
 	base = strings.ToLower(base)
 	return ignoredNames[base] || strings.HasPrefix(base, "._") || ignoredExts[strings.ToLower(filepath.Ext(base))]
 }
 
-// ShouldIgnorePath checks if any directory component in path is ignored without stat.
 func ShouldIgnorePath(path string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		p := strings.ToLower(part)
@@ -274,8 +373,6 @@ func ShouldIgnorePath(path string) bool {
 	return false
 }
 
-// ShouldIgnore reports whether path is OS metadata, VCS data, a partial
-// download marker, or an empty file.
 func ShouldIgnore(path string) bool {
 	base := filepath.Base(path)
 	if ShouldIgnoreName(base) || ShouldIgnorePath(path) {
@@ -287,7 +384,6 @@ func ShouldIgnore(path string) bool {
 	return false
 }
 
-// ListFiles returns all regular files beneath root (missing root => empty).
 func ListFiles(root string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -305,7 +401,6 @@ func ListFiles(root string) ([]string, error) {
 	return out, err
 }
 
-// ListUploadableWithInfo returns non-ignored files beneath root in natural order with their size and mtime.
 func ListUploadableWithInfo(root string) []FileInfo {
 	var out []FileInfo
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -344,7 +439,6 @@ func ListUploadableWithInfo(root string) []FileInfo {
 	return out
 }
 
-// ListUploadable returns non-ignored files beneath root in natural order.
 func ListUploadable(root string) []string {
 	infos := ListUploadableWithInfo(root)
 	out := make([]string, len(infos))
@@ -354,7 +448,6 @@ func ListUploadable(root string) []string {
 	return out
 }
 
-// DirSize sums file sizes beneath root.
 func DirSize(root string) int64 {
 	var n int64
 	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
@@ -368,8 +461,6 @@ func DirSize(root string) int64 {
 	return n
 }
 
-// SafeJoin joins name beneath base and rejects any path escaping base
-// (zip-slip / path traversal protection).
 func SafeJoin(base, name string) (string, error) {
 	name = strings.ReplaceAll(name, "\\", "/")
 	target := filepath.Join(base, filepath.FromSlash(name))
@@ -380,7 +471,6 @@ func SafeJoin(base, name string) (string, error) {
 	return target, nil
 }
 
-// SanitizeFilename strips path separators and control characters.
 func SanitizeFilename(name string) string {
 	name = strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r == 0 || unicode.IsControl(r) {
@@ -389,17 +479,13 @@ func SanitizeFilename(name string) string {
 		return r
 	}, name)
 	name = strings.TrimSpace(name)
-	name = strings.Trim(name, ".")
-	name = strings.TrimSpace(name)
-	if name == "" {
+	if strings.Trim(name, " .") == "" {
 		return "file"
 	}
-	if len(name) > 200 {
-		ext := filepath.Ext(name)
-		if len(ext) > 20 {
-			ext = ""
-		}
-		name = name[:200-len(ext)] + ext
+	name = strings.TrimRight(name, " .")
+	name = strings.TrimLeft(name, " ")
+	if name == "" {
+		return "file"
 	}
 	return name
 }
@@ -410,7 +496,6 @@ var extMap = map[string]string{
 	"jpeg": ".jpg", "tif": ".tiff", "mpeg": ".mpg", "tts": ".ts",
 }
 
-// DetectExtension guesses a canonical extension from magic bytes.
 func DetectExtension(path string) string {
 	kind, err := filetype.MatchFile(path)
 	if err != nil || kind == filetype.Unknown || kind.Extension == "" {
@@ -423,8 +508,6 @@ func DetectExtension(path string) string {
 	return "." + ext
 }
 
-// EnsureExtension renames files with a generic/missing extension according to
-// their detected type, avoiding collisions. It returns the resulting path.
 func EnsureExtension(path string) string {
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() || !genericExts[strings.ToLower(filepath.Ext(path))] {

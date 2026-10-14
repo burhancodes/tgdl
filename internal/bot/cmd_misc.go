@@ -13,7 +13,6 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"github.com/burhanverse/tgdl/internal/dl"
-	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
@@ -113,7 +112,7 @@ func (a *App) cmdCancel(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	}
 	var kb tg.Keyboard
 	for _, j := range active {
-		label := status.Short(filepath.Base(dl.FirstURL(j.URL)), 25)
+		label := filepath.Base(dl.FirstURL(j.URL))
 		kb = append(kb, []tg.Button{{Text: fmt.Sprintf("#%s - %s (%s)", j.ID, label, j.Status), Data: "cancel_job:" + j.ID}})
 	}
 	a.replyKB(ctx, m, "<b>Select a job to cancel:</b>", kb)
@@ -214,7 +213,7 @@ func (a *App) hostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, h
 		link, err = a.hosts.Fileditch(ctx, path, false, up)
 	}
 	if err != nil {
-		_ = a.tg.Edit(ctx, ref, "Upload failed: "+code(status.Short(err.Error(), 300)), tg.SendOpts{})
+		_ = a.tg.Edit(ctx, ref, "Upload failed: "+code(err.Error()), tg.SendOpts{})
 		return
 	}
 	_ = a.tg.Edit(ctx, ref, fmt.Sprintf("<b>Uploaded to %s</b>\n%s\n%s", host, code(f.Name), esc(link)), tg.SendOpts{})
@@ -331,7 +330,7 @@ func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Upda
 	res, err := a.search.Search(sctx, query, providers)
 	if err != nil {
 		slog.Warn("torrent search failed", "err", err)
-		_ = a.tg.Edit(ctx, ref, "Search failed: "+code(status.Short(err.Error(), 300)), tg.SendOpts{})
+		_ = a.tg.Edit(ctx, ref, "Search failed: "+code(err.Error()), tg.SendOpts{})
 		return
 	}
 	site := "All Providers"
