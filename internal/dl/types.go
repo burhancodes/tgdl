@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-
-	"github.com/burhanverse/tgdl/internal/rename"
 )
 
 type Progress struct {
@@ -38,22 +36,22 @@ func (NopProcs) Register(*exec.Cmd) {}
 func (NopProcs) Unregister()        {}
 
 type Args struct {
-	UserID           json.Number     `json:"user_id,omitempty"`
-	Engine           string          `json:"engine,omitempty"`
-	Password         string          `json:"password,omitempty"`
-	ExtraArgs        []string        `json:"extra_args,omitempty"`
-	ArchiveFormat    string          `json:"archive_format,omitempty"`
-	MirrorPixeldrain bool            `json:"mirror_pixeldrain,omitempty"`
-	IsMirror         bool            `json:"is_mirror,omitempty"`
-	UploadTG         bool            `json:"upload_tg,omitempty"`
-	Unzip            bool            `json:"unzip,omitempty"`
-	AsDoc            bool            `json:"as_doc,omitempty"`
-	ReplyMessageID   int             `json:"reply_message_id,omitempty"`
-	AriaOptions      map[string]any  `json:"aria_options,omitempty"`
-	TGFile           *TGFile         `json:"tg_file,omitempty"`
-	RenameScheme     string          `json:"rename_scheme,omitempty"`
-	RenameOptions    *rename.Options `json:"rename_options,omitempty"`
-	RenameFiles      []TGFile        `json:"rename_files,omitempty"`
+	UserID           json.Number    `json:"user_id,omitempty"`
+	Engine           string         `json:"engine,omitempty"`
+	Password         string         `json:"password,omitempty"`
+	ExtraArgs        []string       `json:"extra_args,omitempty"`
+	ArchiveFormat    string         `json:"archive_format,omitempty"`
+	MirrorPixeldrain bool           `json:"mirror_pixeldrain,omitempty"`
+	IsMirror         bool           `json:"is_mirror,omitempty"`
+	UploadTG         bool           `json:"upload_tg,omitempty"`
+	Unzip            bool           `json:"unzip,omitempty"`
+	AsDoc            bool           `json:"as_doc,omitempty"`
+	ReplyMessageID   int            `json:"reply_message_id,omitempty"`
+	AriaOptions      map[string]any `json:"aria_options,omitempty"`
+	TGFile           *TGFile        `json:"tg_file,omitempty"`
+	RenameScheme     string         `json:"rename_scheme,omitempty"`
+	RenameNames      []string       `json:"rename_names,omitempty"`
+	RenameFiles      []TGFile       `json:"rename_files,omitempty"`
 }
 
 type TGFile struct {

@@ -8,8 +8,6 @@ import (
 
 	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/dl"
-	"github.com/burhanverse/tgdl/internal/rename"
-	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/tg"
 )
 
@@ -21,29 +19,38 @@ type sessionKey struct {
 type RenameSession struct {
 	ChatID        int64
 	UserID        int64
-	Scheme        string
-	Opts          rename.Options
 	AsDoc         bool
 	Files         []dl.TGFile
+	Names         []string
 	StatusMsgID   int
 	UpdatedAt     time.Time
 	debounceTimer *time.Timer
 }
 
+type PendingSingleRename struct {
+	ChatID    int64
+	UserID    int64
+	File      dl.TGFile
+	AsDoc     bool
+	CreatedAt time.Time
+}
+
 type RenameSessionManager struct {
-	mu       sync.Mutex
-	sessions map[sessionKey]*RenameSession
-	cfg      *config.Config
-	tg       tg.Client
-	stopCh   chan struct{}
+	mu            sync.Mutex
+	sessions      map[sessionKey]*RenameSession
+	pendingSingle map[sessionKey]*PendingSingleRename
+	cfg           *config.Config
+	tg            tg.Client
+	stopCh        chan struct{}
 }
 
 func NewRenameSessionManager(cfg *config.Config, tg tg.Client) *RenameSessionManager {
 	m := &RenameSessionManager{
-		sessions: make(map[sessionKey]*RenameSession),
-		cfg:      cfg,
-		tg:       tg,
-		stopCh:   make(chan struct{}),
+		sessions:      make(map[sessionKey]*RenameSession),
+		pendingSingle: make(map[sessionKey]*PendingSingleRename),
+		cfg:           cfg,
+		tg:            tg,
+		stopCh:        make(chan struct{}),
 	}
 	m.startSweeper()
 	return m
@@ -80,6 +87,11 @@ func (m *RenameSessionManager) sweep() {
 			delete(m.sessions, k)
 		}
 	}
+	for k, p := range m.pendingSingle {
+		if now.Sub(p.CreatedAt) > ttl {
+			delete(m.pendingSingle, k)
+		}
+	}
 }
 
 func (m *RenameSessionManager) Stop() {
@@ -96,6 +108,7 @@ func (m *RenameSessionManager) Stop() {
 		}
 	}
 	m.sessions = make(map[sessionKey]*RenameSession)
+	m.pendingSingle = make(map[sessionKey]*PendingSingleRename)
 }
 
 func (m *RenameSessionManager) Get(chatID, userID int64) (*RenameSession, bool) {
@@ -119,7 +132,7 @@ func (m *RenameSessionManager) Get(chatID, userID int64) (*RenameSession, bool) 
 	return sess, true
 }
 
-func (m *RenameSessionManager) Start(chatID, userID int64, scheme string, opts rename.Options, asDoc bool, msgID int) *RenameSession {
+func (m *RenameSessionManager) Start(chatID, userID int64, asDoc bool, msgID int) *RenameSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := sessionKey{chatID, userID}
@@ -131,8 +144,6 @@ func (m *RenameSessionManager) Start(chatID, userID int64, scheme string, opts r
 	sess := &RenameSession{
 		ChatID:      chatID,
 		UserID:      userID,
-		Scheme:      scheme,
-		Opts:        opts,
 		AsDoc:       asDoc,
 		StatusMsgID: msgID,
 		UpdatedAt:   time.Now(),
@@ -168,6 +179,19 @@ func (m *RenameSessionManager) AddFile(chatID, userID int64, f dl.TGFile) (added
 	return true, count >= maxBatch, count
 }
 
+func (m *RenameSessionManager) SetNames(chatID, userID int64, names []string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := sessionKey{chatID, userID}
+	sess, ok := m.sessions[k]
+	if !ok {
+		return false
+	}
+	sess.Names = names
+	sess.UpdatedAt = time.Now()
+	return true
+}
+
 func (m *RenameSessionManager) flushCard(chatID, userID int64) {
 	m.mu.Lock()
 	k := sessionKey{chatID, userID}
@@ -177,7 +201,6 @@ func (m *RenameSessionManager) flushCard(chatID, userID int64) {
 		return
 	}
 	sess.debounceTimer = nil
-	scheme := sess.Scheme
 	count := len(sess.Files)
 	msgID := sess.StatusMsgID
 	maxBatch := m.cfg.RenameMaxBatch
@@ -186,7 +209,7 @@ func (m *RenameSessionManager) flushCard(chatID, userID int64) {
 	if msgID == 0 {
 		return
 	}
-	cardText := formatBatchCard(scheme, count, maxBatch)
+	cardText := formatBatchCard(count, maxBatch)
 	kb := batchKeyboard()
 	_ = m.tg.Edit(context.Background(), tg.MessageRef{ChatID: chatID, ID: msgID}, cardText, tg.SendOpts{Keyboard: kb})
 }
@@ -204,37 +227,14 @@ func (m *RenameSessionManager) Clear(chatID, userID int64) bool {
 		sess.debounceTimer = nil
 	}
 	sess.Files = nil
+	sess.Names = nil
 	sess.UpdatedAt = time.Now()
-	scheme := sess.Scheme
 	msgID := sess.StatusMsgID
 	maxBatch := m.cfg.RenameMaxBatch
 	m.mu.Unlock()
 
 	if msgID != 0 {
-		cardText := formatBatchCard(scheme, 0, maxBatch)
-		kb := batchKeyboard()
-		_ = m.tg.Edit(context.Background(), tg.MessageRef{ChatID: chatID, ID: msgID}, cardText, tg.SendOpts{Keyboard: kb})
-	}
-	return true
-}
-
-func (m *RenameSessionManager) SetScheme(chatID, userID int64, scheme string) bool {
-	m.mu.Lock()
-	k := sessionKey{chatID, userID}
-	sess, ok := m.sessions[k]
-	if !ok {
-		m.mu.Unlock()
-		return false
-	}
-	sess.Scheme = scheme
-	sess.UpdatedAt = time.Now()
-	count := len(sess.Files)
-	msgID := sess.StatusMsgID
-	maxBatch := m.cfg.RenameMaxBatch
-	m.mu.Unlock()
-
-	if msgID != 0 {
-		cardText := formatBatchCard(scheme, count, maxBatch)
+		cardText := formatBatchCard(0, maxBatch)
 		kb := batchKeyboard()
 		_ = m.tg.Edit(context.Background(), tg.MessageRef{ChatID: chatID, ID: msgID}, cardText, tg.SendOpts{Keyboard: kb})
 	}
@@ -253,22 +253,54 @@ func (m *RenameSessionManager) Remove(chatID, userID int64) {
 	}
 }
 
-func formatBatchCard(scheme string, count, maxCount int) string {
+func (m *RenameSessionManager) SetPendingSingle(chatID, userID int64, f dl.TGFile, asDoc bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pendingSingle[sessionKey{chatID, userID}] = &PendingSingleRename{
+		ChatID:    chatID,
+		UserID:    userID,
+		File:      f,
+		AsDoc:     asDoc,
+		CreatedAt: time.Now(),
+	}
+}
+
+func (m *RenameSessionManager) GetPendingSingle(chatID, userID int64) (*PendingSingleRename, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := sessionKey{chatID, userID}
+	p, ok := m.pendingSingle[k]
+	if !ok {
+		return nil, false
+	}
+	ttl := m.cfg.RenameSessionTTL
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	if time.Since(p.CreatedAt) > ttl {
+		delete(m.pendingSingle, k)
+		return nil, false
+	}
+	return p, true
+}
+
+func (m *RenameSessionManager) RemovePendingSingle(chatID, userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pendingSingle, sessionKey{chatID, userID})
+}
+
+func formatBatchCard(count, maxCount int) string {
 	if maxCount <= 0 {
 		maxCount = 200
 	}
-	return fmt.Sprintf("<b>Batch Rename Session</b>\n\n• <b>Scheme</b>: <code>%s</code>\n• <b>Files in batch</b>: <code>%d / %d</code>\n\n<i>Send media files (or albums) to add them to this batch.</i>",
-		status.Esc(scheme), count, maxCount)
+	return fmt.Sprintf("<b>Batch Rename Session</b>\n\n• <b>Files in batch</b>: <code>%d / %d</code>\n\n<i>Send media files to add them to this batch, then send one message with one new name per line.</i>",
+		count, maxCount)
 }
 
 func batchKeyboard() tg.Keyboard {
 	return tg.Keyboard{
 		{
-			tg.Button{Text: "Preview", Data: "rename:preview"},
-			tg.Button{Text: "Apply", Data: "rename:apply"},
-		},
-		{
-			tg.Button{Text: "Clear", Data: "rename:clear"},
 			tg.Button{Text: "Cancel", Data: "rename:cancel"},
 		},
 	}

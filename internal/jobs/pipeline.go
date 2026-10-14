@@ -366,42 +366,26 @@ func (m *Manager) handleArchive(st *State, f, rel, key string, unzipJob bool) (s
 
 	uploadExtracted := func() error {
 		if files := fsutil.ListUploadable(st.Extract); len(files) > 0 {
-			if args.RenameScheme != "" {
-				schemeStr := args.RenameScheme
-				if p, ok := rename.LookupPreset(schemeStr); ok {
-					schemeStr = p
-				}
-				if sc, err := rename.Parse(schemeStr); err == nil {
-					var inputs []rename.Input
-					for _, f := range files {
-						fi, _ := os.Stat(f)
-						sz := int64(0)
-						var mt time.Time
-						if fi != nil {
-							sz = fi.Size()
-							mt = fi.ModTime()
+			if len(args.RenameNames) > 0 {
+				st.setRenameInfo("", len(files))
+				for i, newName := range args.RenameNames {
+					if i < len(files) && newName != "" && newName != filepath.Base(files[i]) {
+						oldP := files[i]
+						newP := filepath.Join(filepath.Dir(oldP), newName)
+						if err := os.Rename(oldP, newP); err == nil {
+							files[i] = newP
 						}
-						inputs = append(inputs, rename.Input{
-							OriginalName: filepath.Base(f),
-							Size:         sz,
-							ModTime:      mt,
-							Parent:       filepath.Base(st.Extract),
-						})
 					}
-					opts := rename.Options{}
-					if args.RenameOptions != nil {
-						opts = *args.RenameOptions
-					}
-					if plan, err := sc.Plan(inputs, opts); err == nil {
-						st.setRenameInfo(schemeStr, len(files))
-						for i, entry := range plan.Entries {
-							if i < len(files) && entry.NewName != "" && entry.NewName != filepath.Base(files[i]) {
-								oldP := files[i]
-								newP := filepath.Join(filepath.Dir(oldP), entry.NewName)
-								if err := os.Rename(oldP, newP); err == nil {
-									files[i] = newP
-								}
-							}
+				}
+			} else if args.RenameScheme != "" {
+				st.setRenameInfo(args.RenameScheme, len(files))
+				for i, f := range files {
+					newName, _, _ := rename.Name(args.RenameScheme, filepath.Base(f))
+					if newName != "" && newName != filepath.Base(f) {
+						oldP := f
+						newP := filepath.Join(filepath.Dir(oldP), newName)
+						if err := os.Rename(oldP, newP); err == nil {
+							files[i] = newP
 						}
 					}
 				}

@@ -365,8 +365,20 @@ func (a *App) Default(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 		}
 	}
 	if m.ReplyToMessage != nil && m.Text != "" && !strings.HasPrefix(m.Text, "/") {
-		if a.mgr.DeliverPassword(m.Chat.ID, m.ReplyToMessage.ID, strings.TrimSpace(m.Text)) {
+		if a.mgr != nil && a.mgr.DeliverPassword(m.Chat.ID, m.ReplyToMessage.ID, strings.TrimSpace(m.Text)) {
 			_ = a.tg.Delete(ctx, tg.MessageRef{ChatID: m.Chat.ID, ID: m.ID})
+			return
+		}
+	}
+	if a.renameSessions != nil && m.Text != "" && !strings.HasPrefix(m.Text, "/") {
+		if pending, ok := a.renameSessions.GetPendingSingle(m.Chat.ID, userID(m)); ok {
+			a.renameSessions.RemovePendingSingle(m.Chat.ID, userID(m))
+			a.handlePendingSingleName(ctx, m, pending)
+			return
+		}
+		if sess, ok := a.renameSessions.Get(m.Chat.ID, userID(m)); ok {
+			a.handleBatchNamesMessage(ctx, m, sess)
+			return
 		}
 	}
 }
@@ -500,7 +512,9 @@ func (a *App) enqueue(ctx context.Context, m *models.Message, target string, arg
 		a.reply(ctx, m, "Could not create the job: "+code(err.Error()))
 		return
 	}
-	a.mgr.Add(job.ID)
+	if a.mgr != nil {
+		a.mgr.Add(job.ID)
+	}
 }
 
 var urlPrefixes = []string{"http://", "https://", "magnet:", "gdrive:", "gd2tg:", "mega:", "gofile:", "gf:", "gfdl:",

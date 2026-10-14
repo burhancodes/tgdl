@@ -118,9 +118,16 @@ func TestRenameJob_BatchSuccess(t *testing.T) {
 		{FileID: "4", Name: "doc4.txt", Size: 4},
 		{FileID: "5", Name: "doc5.txt", Size: 4},
 	}
+	expected := []string{
+		"first.txt",
+		"second.txt",
+		"third.txt",
+		"fourth.txt",
+		"fifth.txt",
+	}
 	args := dl.Args{
-		RenameScheme: "{n:2} - {name}.{ext}",
-		RenameFiles:  files,
+		RenameNames: expected,
+		RenameFiles: files,
 	}
 	argsJSON, _ := json.Marshal(args)
 
@@ -133,14 +140,6 @@ func TestRenameJob_BatchSuccess(t *testing.T) {
 
 	mock.mu.Lock()
 	defer mock.mu.Unlock()
-
-	expected := []string{
-		"01 - doc1.txt",
-		"02 - doc2.txt",
-		"03 - doc3.txt",
-		"04 - doc4.txt",
-		"05 - doc5.txt",
-	}
 
 	if len(mock.uploaded) != len(expected) {
 		t.Fatalf("expected %d uploads, got %d: %+v", len(expected), len(mock.uploaded), mock.uploaded)
@@ -182,9 +181,16 @@ func TestRenameJob_ThirdFileFailsAndSkipped(t *testing.T) {
 		{FileID: "4", Name: "doc4.txt", Size: 4},
 		{FileID: "5", Name: "doc5.txt", Size: 4},
 	}
+	names := []string{
+		"first.txt",
+		"second.txt",
+		"third.txt",
+		"fourth.txt",
+		"fifth.txt",
+	}
 	args := dl.Args{
-		RenameScheme: "{n:2} - {name}.{ext}",
-		RenameFiles:  files,
+		RenameNames: names,
+		RenameFiles: files,
 	}
 	argsJSON, _ := json.Marshal(args)
 
@@ -199,10 +205,10 @@ func TestRenameJob_ThirdFileFailsAndSkipped(t *testing.T) {
 	defer mock.mu.Unlock()
 
 	expected := []string{
-		"01 - doc1.txt",
-		"02 - doc2.txt",
-		"04 - doc4.txt",
-		"05 - doc5.txt",
+		"first.txt",
+		"second.txt",
+		"fourth.txt",
+		"fifth.txt",
 	}
 
 	if len(mock.uploaded) != len(expected) {
@@ -259,8 +265,8 @@ func TestRenameJob_CancelMidBatchCleansDest(t *testing.T) {
 		{FileID: "3", Name: "doc3.txt", Size: 4},
 	}
 	args := dl.Args{
-		RenameScheme: "{n:2} - {name}.{ext}",
-		RenameFiles:  files,
+		RenameNames: []string{"a.txt", "b.txt", "c.txt"},
+		RenameFiles: files,
 	}
 	argsJSON, _ := json.Marshal(args)
 
@@ -294,8 +300,7 @@ func TestRenameJob_ResumeReusesPlan(t *testing.T) {
 		{FileID: "2", Name: "doc2.txt", Size: 4},
 	}
 	args := dl.Args{
-		RenameScheme: "{name}_{rand:4}.{ext}",
-		RenameFiles:  files,
+		RenameFiles: files,
 	}
 	argsJSON, _ := json.Marshal(args)
 
@@ -304,27 +309,11 @@ func TestRenameJob_ResumeReusesPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parsed, _ := rename.Parse("{name}_{rand:4}.{ext}")
-	plan, _ := parsed.Plan([]rename.Input{
-		{OriginalName: "doc1.txt", Size: 4},
-		{OriginalName: "doc2.txt", Size: 4},
-	}, rename.Options{})
-
-	type planEntry struct {
-		FileID  string `json:"file_id"`
-		OldName string `json:"old_name"`
-		NewName string `json:"new_name"`
-	}
-	storedEntries := []planEntry{
-		{FileID: "1", OldName: "doc1.txt", NewName: "custom_fixed_1.txt"},
-		{FileID: "2", OldName: "doc2.txt", NewName: "custom_fixed_2.txt"},
-	}
-	storedJSON, _ := json.Marshal(storedEntries)
+	storedNames := []string{"custom_fixed_1.txt", "custom_fixed_2.txt"}
+	storedJSON, _ := json.Marshal(storedNames)
 	if err := st.SaveRenamePlan(ctx, job.ID, string(storedJSON)); err != nil {
 		t.Fatal(err)
 	}
-
-	_ = plan
 
 	m.run(job.ID)
 
@@ -339,5 +328,67 @@ func TestRenameJob_ResumeReusesPlan(t *testing.T) {
 	}
 	if mock.uploaded[1] != "custom_fixed_2.txt" {
 		t.Errorf("file 1 mismatch: got %s, want custom_fixed_2.txt", mock.uploaded[1])
+	}
+}
+
+func TestRenameJob_PreviewMatchesAppliedNames(t *testing.T) {
+	mock := &mockRenameTG{}
+	m, st, _, _ := setupRenameManager(t, mock)
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	files := []dl.TGFile{
+		{FileID: "1", Name: "Trix_The_Cold_Sato_san_is_Only_Sweet_to_Me_S01E01_WEBRip_1080p_AV1.mkv", Size: 4},
+		{FileID: "2", Name: "Trix_The_Cold_Sato_san_is_Only_Sweet_to_Me_S01E02_WEBRip_1080p_AV1.mkv", Size: 4},
+		{FileID: "3", Name: "Trix_The_Cold_Sato_san_is_Only_Sweet_to_Me_S01E03_WEBRip_1080p_AV1.mkv", Size: 4},
+	}
+	typedNames := []string{
+		"The Cold Sato-san S01E01",
+		"The Cold Sato-san S01E02",
+		"The Cold Sato-san S01E03",
+	}
+
+	var originals []string
+	for _, f := range files {
+		originals = append(originals, f.Name)
+	}
+	previewEntries, err := rename.PlanBatch(typedNames, originals)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var finalNames []string
+	for _, e := range previewEntries {
+		finalNames = append(finalNames, e.NewName)
+	}
+
+	args := dl.Args{
+		RenameNames: finalNames,
+		RenameFiles: files,
+	}
+	argsJSON, _ := json.Marshal(args)
+	job, err := st.CreateJob(ctx, 100, "rename:batch", false, string(argsJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.run(job.ID)
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.uploaded) != len(finalNames) {
+		t.Fatalf("expected %d uploads, got %d", len(finalNames), len(mock.uploaded))
+	}
+	for i, name := range finalNames {
+		if mock.uploaded[i] != name {
+			t.Errorf("[%d] uploaded=%q != preview=%q", i, mock.uploaded[i], name)
+		}
 	}
 }

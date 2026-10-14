@@ -19,7 +19,7 @@ internal/
   torrent           aria2 RPC daemon supervisor, tracker list, Magnetio search client
   gdrive, mega      cloud downloaders (MEGA public-link protocol implemented natively)
   upload            GoFile / FileDitch / Pixeldrain uploads, per-user API keys
-  rename            template-based file renaming (pure Go, zero-copy, streaming)
+  rename            literal file renaming (pure Go, zero-copy, streaming)
   archive, media    extraction/creation, split-archive detection, ffmpeg wrappers
   netguard          SSRF-safe HTTP transport (checks the connected IP, not a pre-resolve)
   pacing, status, fsutil, auth, logging
@@ -37,6 +37,14 @@ Key design changes from the Python version:
 * **SSRF protection at dial time**, covering redirects, DNS rebinding, HLS segments.
 * **Zip-slip / tar traversal protection** in extraction; passwords never echoed to chat.
 * Status card rendering is a pure function of a `Snapshot` (`internal/status`), unit-tested.
+
+## Renaming files
+
+Send a name, that's it.
+* Single file: reply with `/rename The Cold Sato-san S01E01` → `The Cold Sato-san S01E01.mkv`
+* Several files: `/rename batch`, send the files, then send one name per line.
+
+The extension (`.mkv`, `.mp4` …) is kept automatically. See [docs/rename.md](docs/rename.md).
 
 ## Configuration & Runtime Settings
 

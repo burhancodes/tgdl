@@ -101,65 +101,57 @@ func (s renameSource) Fetch(ctx context.Context, r *Request) dl.Result {
 		return fail("no files to rename")
 	}
 
-	schemeStr := r.Args.RenameScheme
-	if p, ok := rename.LookupPreset(schemeStr); ok {
-		schemeStr = p
-	}
-	if schemeStr == "" {
-		schemeStr = "{name}.{ext}"
-	}
-
 	planMap := make(map[string]string)
 	if stored, err := s.d.Store.GetRenamePlan(ctx, r.Job.ID); err == nil && stored != "" {
-		var entries []renamePlanEntry
-		if json.Unmarshal([]byte(stored), &entries) == nil {
-			for _, e := range entries {
-				planMap[e.FileID] = e.NewName
+		var names []string
+		if json.Unmarshal([]byte(stored), &names) == nil && len(names) > 0 {
+			for i, name := range names {
+				if i < len(files) {
+					planMap[files[i].FileID] = name
+				}
+			}
+		} else {
+			var entries []struct {
+				FileID  string `json:"file_id"`
+				NewName string `json:"new_name"`
+			}
+			if json.Unmarshal([]byte(stored), &entries) == nil {
+				for _, e := range entries {
+					planMap[e.FileID] = e.NewName
+				}
 			}
 		}
 	}
 
 	if len(planMap) == 0 {
-		parsed, err := rename.Parse(schemeStr)
-		if err != nil {
-			return fail("parse scheme: %v", err)
-		}
-		var inputs []rename.Input
-		for _, f := range files {
-			inputs = append(inputs, rename.Input{
-				OriginalName: f.Name,
-				Size:         f.Size,
-			})
-		}
-		opts := rename.Options{}
-		if r.Args.RenameOptions != nil {
-			opts = *r.Args.RenameOptions
-		}
-		plan, err := parsed.Plan(inputs, opts)
-		if err != nil {
-			return fail("rename plan: %v", err)
-		}
-		var entries []renamePlanEntry
-		for i, pe := range plan.Entries {
-			if i < len(files) {
-				name := pe.NewName
-				if name == "" {
-					name = files[i].Name
+		var names []string
+		if len(r.Args.RenameNames) > 0 {
+			names = r.Args.RenameNames
+		} else if r.Args.RenameScheme != "" {
+			for _, f := range files {
+				finalName, _, _ := rename.Name(r.Args.RenameScheme, f.Name)
+				if finalName == "" {
+					finalName = f.Name
 				}
-				entries = append(entries, renamePlanEntry{
-					FileID:  files[i].FileID,
-					OldName: files[i].Name,
-					NewName: name,
-				})
+				names = append(names, finalName)
+			}
+		} else {
+			for _, f := range files {
+				names = append(names, f.Name)
+			}
+		}
+
+		for i, name := range names {
+			if i < len(files) {
 				planMap[files[i].FileID] = name
 			}
 		}
-		if b, err := json.Marshal(entries); err == nil {
+		if b, err := json.Marshal(names); err == nil {
 			_ = s.d.Store.SaveRenamePlan(ctx, r.Job.ID, string(b))
 		}
 	}
 
-	r.St.setRenameInfo(schemeStr, len(files))
+	r.St.setRenameInfo(r.Args.RenameScheme, len(files))
 
 	uploaded, _ := s.d.Store.UploadedFilenames(ctx, r.Job.ID)
 	for i, f := range files {
