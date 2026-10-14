@@ -19,6 +19,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
+	"github.com/burhanverse/tgdl/internal/upload"
 )
 
 type Manager struct {
@@ -140,7 +141,6 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 	}
 	m.mu.Unlock()
 
-	now := time.Now()
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -151,17 +151,10 @@ func (m *Manager) cleanupOrphans(keep []*store.Job) {
 		}
 		isTarget := strings.HasPrefix(name, "job_") ||
 			strings.HasSuffix(name, "_extract") ||
-			strings.HasPrefix(name, "tmp_up_") ||
 			strings.HasSuffix(name, "_pd_temp")
 
 		if !isTarget || live[name] {
 			continue
-		}
-
-		if strings.HasPrefix(name, "tmp_up_") {
-			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) < 6*time.Hour {
-				continue
-			}
 		}
 
 		slog.Info("removing orphaned directory", "dir", name)
@@ -686,15 +679,41 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 		return err
 	}
 	var mirror archive.Uploader
-	if args.MirrorPixeldrain {
+	selected := m.selectedHosts(args)
+	if len(selected) > 0 {
 		uid := args.UserIDInt()
-		mirror = func(ctx context.Context, p string) (string, error) { return m.d.Hosts.Pixeldrain(ctx, p, uid, nil) }
+		retries := 3
+		if m.d.Cfg != nil && m.d.Cfg.MirrorRetries >= 0 {
+			retries = m.d.Cfg.MirrorRetries
+		}
+		mirror = func(ctx context.Context, p string) (string, error) {
+			fn := st.FileName(p)
+			displayName := fn.Display
+			if displayName == "" {
+				displayName = filepath.Base(p)
+			}
+			var lastLink string
+			var lastErr error
+			for _, h := range selected {
+				link, err := m.d.Hosts.UploadWithRetry(ctx, h, p, displayName, uid, retries, nil)
+				if err != nil {
+					lastErr = err
+				} else {
+					lastLink = link
+					st.addPDLink(fmt.Sprintf("%s (%s)", displayName, h.Name()), link)
+				}
+			}
+			if lastLink != "" {
+				return lastLink, nil
+			}
+			return "", lastErr
+		}
 	}
 	tempDir := filepath.Join(m.d.Cfg.DownloadsDir(), st.Job().MirrorTempDirName())
 	opts := archive.FolderOpts{
 		Format:     args.ArchiveFormat,
 		MirrorPD:   mirror,
-		OnMirror:   func(l archive.Link) { st.addPDLink(l.Name, l.URL) },
+		OnMirror:   func(l archive.Link) {},
 		MirrorDone: &st.mirrorWG,
 		TempDir:    tempDir,
 		Threads:    m.d.Cfg.ArchiveThreads,
@@ -854,9 +873,12 @@ func (m *Manager) summary(st *State, sent, skipped int) string {
 		b.WriteString("\n\n<b>Mirror links</b>")
 		for _, r := range mirrors {
 			fmt.Fprintf(&b, "\n<code>%s</code>", status.Esc(r.File))
-			for _, host := range []string{"gofile", "fileditch", "pixeldrain"} {
-				if u := r.Links[host]; u != "" {
-					fmt.Fprintf(&b, "\n• <a href=\"%s\">%s</a>", status.Esc(u), host)
+			for _, h := range upload.AllHosts {
+				k := string(h)
+				if u := r.Links[k]; u != "" {
+					fmt.Fprintf(&b, "\n• %s: <a href=\"%s\">%s</a>", h.Name(), status.Esc(u), status.Esc(u))
+				} else if e := r.Errors[k]; e != "" {
+					fmt.Fprintf(&b, "\n• %s: %s", h.Name(), status.Esc(e))
 				}
 			}
 		}
@@ -872,9 +894,9 @@ func (m *Manager) summary(st *State, sent, skipped int) string {
 		}
 	}
 	if links := st.pdLinkList(); len(links) > 0 {
-		b.WriteString("\n\n<b>Pixeldrain mirror links</b>")
+		b.WriteString("\n\n<b>Archive mirror links</b>")
 		for _, l := range links {
-			fmt.Fprintf(&b, "\n• %s: %s", status.Code(l.Name), status.Esc(l.URL))
+			fmt.Fprintf(&b, "\n• %s: <a href=\"%s\">%s</a>", status.Code(l.Name), status.Esc(l.URL), status.Esc(l.URL))
 		}
 	}
 	return b.String()

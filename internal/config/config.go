@@ -29,6 +29,8 @@ type Config struct {
 	PixeldrainDomain string
 	GofileAPIKey     string
 	GofileBypassHost string
+	MirrorHosts      string
+	MirrorRetries    int
 	AllowSharedKeys  bool
 	AllowPrivateURLs bool
 	ShowSystemStats  bool
@@ -126,6 +128,8 @@ func Load() (*Config, error) {
 		PixeldrainDomain: pixeldrainDomain(envStr("PIXELDRAIN_DOMAIN", "pixeldrain.com")),
 		GofileAPIKey:     envStr("GOFILE_API_KEY", ""),
 		GofileBypassHost: envStr("GOFILE_BYPASS_HOST", "gf.1drv.eu.org"),
+		MirrorHosts:      envStr("MIRROR_HOSTS", "gofile,fileditch,pixeldrain"),
+		MirrorRetries:    envInt("MIRROR_RETRIES", 3),
 		AllowSharedKeys:  envBool("ALLOW_SHARED_UPLOAD_KEYS", false),
 		AllowPrivateURLs: envBool("ALLOW_PRIVATE_NETWORK_URLS", false),
 		ShowSystemStats:  envBool("SHOW_SYSTEM_STATS_ON_JOB_CARD", true),

@@ -120,3 +120,19 @@ When running a self-hosted `telegram-bot-api` server in `--local` mode (enabled 
 - `RENAME_MAX_BATCH`: Maximum number of files permitted in a single batch rename session (default `30`).
 - `RENAME_SESSION_TTL`: Duration before an inactive batch rename session expires and is cleaned up (default `30m`).
 
+---
+
+## Mirroring & Host Uploads (`.env`)
+
+- `MIRROR_HOSTS`: Comma-separated list of globally enabled mirror hosts (default `gofile,fileditch,pixeldrain`).
+- `MIRROR_RETRIES`: Number of retry attempts on network error, timeouts, 5xx, or 429 (default `3`).
+- `PIXELDRAIN_API_KEY`: Global/owner Pixeldrain API key.
+- `GOFILE_API_TOKEN`: Global/owner GoFile API token.
+
+Commands & Flags:
+- `/m [-to hosts] [-tg] [-uz] [-p pass] <url...>`: Mirror to enabled hosts (or specific hosts via `-to gofile,pd`).
+- `/gofile [-tg] [-uz] <url...>` (aliases: `/gf`, `/gfup`): Mirror directly to GoFile (or download if a GoFile link is passed).
+- `/fileditch [-tg] [-uz] <url...>` (aliases: `/fd`, `/fdup`): Mirror directly to FileDitch.
+- `/pixeldrain [-tg] [-uz] <url...>` (aliases: `/pd`, `/pdup`): Mirror directly to Pixeldrain.
+- Flags: `-to` selects mirror hosts, `-tg` also uploads to Telegram, `-uz` extracts archives before mirroring.
+

@@ -46,6 +46,15 @@ Send a name, that's it.
 
 The extension (`.mkv`, `.mp4` …) is kept automatically. See [docs/rename.md](docs/rename.md).
 
+## Mirroring to Web Hosts
+
+Mirror files and links to GoFile, FileDitch, and Pixeldrain:
+* `/m [-to hosts] [-tg] [-uz] <url…>` — mirror to enabled hosts (or specific hosts with `-to gofile,pd`)
+* `/gofile <url…>` or `/gf` — mirror directly to GoFile (or download if a GoFile URL is passed)
+* `/fileditch <url…>` or `/fd` — mirror directly to FileDitch
+* `/pixeldrain <url…>` or `/pd` — mirror directly to Pixeldrain
+* Pass `-tg` to also upload to Telegram, and `-uz` to extract archives before mirroring. Reply to any media or URL list.
+
 ## Configuration & Runtime Settings
 
 All bot configurations, environment variables, and runtime limits can be viewed and dynamically modified directly inside Telegram by the bot owner via `/settings`.

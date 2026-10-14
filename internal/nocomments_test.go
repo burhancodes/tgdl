@@ -36,9 +36,11 @@ func TestNoComments(t *testing.T) {
 		"internal/auth/auth_test.go",
 		"internal/bot/app.go",
 		"internal/bot/bot_test.go",
+		"internal/bot/cmd_download.go",
 		"internal/bot/cmd_misc.go",
 		"internal/bot/cmd_rename.go",
 		"internal/bot/help.go",
+		"internal/bot/mirror_test.go",
 		"internal/bot/rename_session.go",
 		"internal/bot/rename_session_test.go",
 		"internal/bot/settings.go",
@@ -52,8 +54,10 @@ func TestNoComments(t *testing.T) {
 		"internal/fsutil/fsutil.go",
 		"internal/fsutil/fsutil_test.go",
 		"internal/jobs/manager.go",
+		"internal/jobs/manager_test.go",
 		"internal/jobs/pipeline.go",
 		"internal/jobs/pipeline_archive_test.go",
+		"internal/jobs/pipeline_mirror_test.go",
 		"internal/jobs/rename_test.go",
 		"internal/jobs/semaphore.go",
 		"internal/jobs/semaphore_test.go",
@@ -79,6 +83,9 @@ func TestNoComments(t *testing.T) {
 		"internal/tg/loadtest_test.go",
 		"internal/tg/tg.go",
 		"internal/torrent/aria2.go",
+		"internal/upload/hosts.go",
+		"internal/upload/hosts_test.go",
+		"internal/upload/keys.go",
 	}
 
 	settingsDir := filepath.Join(root, "internal", "settings")

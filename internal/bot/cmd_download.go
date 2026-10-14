@@ -20,6 +20,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/tg"
+	"github.com/burhanverse/tgdl/internal/upload"
 )
 
 func (a *App) cmdHelp(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
@@ -29,7 +30,6 @@ func (a *App) cmdHelp(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	}
 }
 
-// urlsFromText collects URL-looking tokens from free text.
 func urlsFromText(text string) []string {
 	var out []string
 	for _, t := range strings.Fields(text) {
@@ -40,7 +40,6 @@ func urlsFromText(text string) []string {
 	return out
 }
 
-// urlsFromTextFile downloads a replied .txt document and returns its URLs.
 func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, error) {
 	dir, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_txt_")
 	if err != nil {
@@ -75,8 +74,6 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 	return out, sc.Err()
 }
 
-// collectURLs merges URLs from the command tokens, a replied text message and
-// a replied .txt document.
 func (a *App) collectURLs(ctx context.Context, m *models.Message, fromTokens []string) []string {
 	urls := append([]string(nil), fromTokens...)
 	if len(urls) > 0 || m.ReplyToMessage == nil {
@@ -93,38 +90,75 @@ func (a *App) collectURLs(ctx context.Context, m *models.Message, fromTokens []s
 	return urlsFromText(textOf(r))
 }
 
-func (a *App) cmdMirror(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
-	m := u.Message
-	toks := tokens(m)
-	upTG := false
-	var link string
-	for _, t := range toks {
-		switch strings.ToLower(t) {
-		case "-tg":
-			upTG = true
-		case "-m", "-mirror":
-		default:
-			if link == "" && strings.HasPrefix(t, "http") {
-				link = t
+func (a *App) cmdMirrorTo(hosts []upload.HostID) tgbot.HandlerFunc {
+	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+		m := u.Message
+		f := parseFlags(tokens(m))
+		if len(hosts) > 0 && f.ToHosts != "" {
+			a.reply(ctx, m, "-to cannot be used with host-specific commands")
+			return
+		}
+		if len(hosts) == 1 && hosts[0] == upload.GoFile {
+			urls := a.collectURLs(ctx, m, f.URLs)
+			hasGofile := false
+			for _, x := range urls {
+				if dl.IsGofileURL(a.cfg, x) {
+					hasGofile = true
+					break
+				}
+			}
+			if !hasGofile {
+				for _, t := range tokens(m) {
+					if !strings.HasPrefix(t, "-") && dl.IsGofileURL(a.cfg, t) {
+						hasGofile = true
+						break
+					}
+				}
+			}
+			if hasGofile {
+				a.cmdGofileDL(ctx, nil, u)
+				return
 			}
 		}
-	}
-	args := dl.Args{IsMirror: true, UploadTG: upTG}
-	if _, f := mediaSource(m); f != nil && link == "" {
-		args.TGFile = f
-		a.enqueue(ctx, m, "mirror_tg:"+f.Name, args)
-		return
-	}
-	if link == "" && m.ReplyToMessage != nil {
-		if urls := urlsFromText(textOf(m.ReplyToMessage)); len(urls) > 0 {
-			link = urls[0]
+		var mirrorHosts []string
+		if f.ToHosts != "" {
+			parsed, err := upload.ParseHosts(f.ToHosts)
+			if err != nil {
+				a.reply(ctx, m, err.Error())
+				return
+			}
+			for _, h := range parsed {
+				mirrorHosts = append(mirrorHosts, string(h))
+			}
+		} else if len(hosts) > 0 {
+			for _, h := range hosts {
+				mirrorHosts = append(mirrorHosts, string(h))
+			}
+		}
+
+		urls := a.collectURLs(ctx, m, f.URLs)
+		args := dl.Args{
+			IsMirror:    true,
+			UploadTG:    f.TG,
+			Unzip:       f.Unzip,
+			Password:    f.Password,
+			MirrorHosts: mirrorHosts,
+		}
+		if len(urls) > 0 {
+			a.enqueue(ctx, m, "mirror:"+jobTarget(urls), args)
+			return
+		}
+		if _, file := mediaSource(m); file != nil {
+			args.TGFile = file
+			a.enqueue(ctx, m, "mirror_tg:"+file.Name, args)
+			return
+		}
+		if len(hosts) == 0 {
+			a.reply(ctx, m, "Usage: <code>/m [-to hosts] [-tg] [-uz] &lt;url…&gt;</code> (or reply to a media file or URL list).")
+		} else {
+			a.reply(ctx, m, fmt.Sprintf("Usage: <code>/%s [-tg] [-uz] &lt;url…&gt;</code> (or reply to a media file or URL list).", hosts[0]))
 		}
 	}
-	if link == "" {
-		a.reply(ctx, m, "Provide a URL or reply to a Telegram file with <code>/m [-tg]</code>.")
-		return
-	}
-	a.enqueue(ctx, m, "mirror:"+link, args)
 }
 
 func (a *App) cmdDirect(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
@@ -153,7 +187,7 @@ func (a *App) cmdEngine(engine, name string) tgbot.HandlerFunc {
 	}
 }
 
-func (a *App) cmdGofile(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdGofileDL(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message
 	f := parseFlags(tokens(m))
 	urls := a.collectURLs(ctx, m, f.URLs)
@@ -167,15 +201,7 @@ func (a *App) cmdGofile(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	}
 
 	if len(urls) == 0 {
-		if _, media := mediaSource(m); media != nil {
-			a.queueHostUpload(ctx, m, media, "gofile")
-			return
-		}
-	}
-
-	if len(urls) == 0 {
-		a.reply(ctx, m, "Please provide a GoFile link to download (e.g. <code>/gofile &lt;url&gt;</code> or <code>/gfdl &lt;url&gt;</code>), "+
-			"or reply to a media message with <code>/gfup</code> to upload it to GoFile.")
+		a.reply(ctx, m, "Please provide a GoFile link to download (e.g. <code>/gfdl &lt;url&gt;</code>).")
 		return
 	}
 
@@ -331,7 +357,6 @@ func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	})
 }
 
-// torrentFileTarget saves a replied .torrent document and returns its job target.
 func (a *App) torrentFileTarget(ctx context.Context, f *dl.TGFile) (string, error) {
 	dir := filepath.Join(a.cfg.DataDir, "torrents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -386,7 +411,6 @@ var ariaFlags = map[string]string{
 	"--checksum": "checksum", "--out": "out", "--speed": "max-download-limit",
 }
 
-// parseAriaFlags extracts aria2 options and remaining URL tokens.
 func parseAriaFlags(toks []string, defaultLimit string) (map[string]any, []string) {
 	opts := map[string]any{}
 	set := func(k, v string) {

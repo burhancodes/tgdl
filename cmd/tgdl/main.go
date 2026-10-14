@@ -167,7 +167,10 @@ func run() error {
 
 func commands() []tg.Command {
 	return []tg.Command{
-		{Name: "m", Description: "Mirror file/URL to GoFile, FileDitch & Pixeldrain"},
+		{Name: "m", Description: "Mirror to hosts (-to, -tg, -uz)"},
+		{Name: "gofile", Description: "Mirror to GoFile or download GoFile link (-tg, -uz)"},
+		{Name: "fileditch", Description: "Mirror to FileDitch (-tg, -uz)"},
+		{Name: "pixeldrain", Description: "Mirror to Pixeldrain (-tg, -uz)"},
 		{Name: "dl", Description: "Download direct HTTP link"},
 		{Name: "aria", Description: "Download link or torrent using aria2"},
 		{Name: "tor", Description: "Download torrent or magnet link"},
@@ -177,9 +180,6 @@ func commands() []tg.Command {
 		{Name: "mega", Description: "Download file or folder from MEGA"},
 		{Name: "cookies", Description: "Manage your cookies for gallery-dl and cyberdrop-dl"},
 		{Name: "gd2tg", Description: "Download Google Drive link to Telegram"},
-		{Name: "gofile", Description: "Download GoFile links or upload replied media"},
-		{Name: "fileditch", Description: "Upload replied media to FileDitch"},
-		{Name: "pdup", Description: "Upload replied media to Pixeldrain"},
 		{Name: "unzip", Description: "Download & extract an archive"},
 		{Name: "rename", Description: "Rename media files"},
 		{Name: "status", Description: "Show active tasks"},
@@ -307,6 +307,21 @@ func registerLiveSettingsHooks(setMgr *settings.Manager, cfg *config.Config, mgr
 			return err
 		}
 		c.SetAuthorizedIDs(ids)
+		return nil
+	})
+	setMgr.RegisterHook("MIRROR_HOSTS", func(ctx context.Context, c *config.Config, key, val string) error {
+		if _, err := upload.ParseHosts(val); err != nil {
+			return err
+		}
+		c.MirrorHosts = val
+		return nil
+	})
+	setMgr.RegisterHook("MIRROR_RETRIES", func(ctx context.Context, c *config.Config, key, val string) error {
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 0 || n > 10 {
+			return errors.New("must be between 0 and 10")
+		}
+		c.MirrorRetries = n
 		return nil
 	})
 	setMgr.RegisterHook("PIN_STATUS_MESSAGE", func(ctx context.Context, c *config.Config, key, val string) error {

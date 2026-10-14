@@ -15,13 +15,15 @@ import (
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
+	"github.com/burhanverse/tgdl/internal/upload"
 )
 
 type Skip struct{ Name, Reason string }
 
 type MirrorRecord struct {
-	File  string
-	Links map[string]string
+	File   string
+	Links  map[string]string
+	Errors map[string]string
 }
 
 type State struct {
@@ -89,6 +91,8 @@ type State struct {
 	asDoc         bool
 	pdLinks       []archiveLink
 	hosts         map[string]status.HostState
+	hostOrder     []string
+	mirrorLabels  map[string]string
 	mirrors       []MirrorRecord
 	webMirrorDone bool
 	mirrorWG      sync.WaitGroup
@@ -393,6 +397,22 @@ func (s *State) setHosts(h map[string]status.HostState) {
 	s.Poke()
 }
 
+func (s *State) setHostsWithOrder(h map[string]status.HostState, order []string, labels map[string]string) {
+	cp := make(map[string]status.HostState, len(h))
+	for k, v := range h {
+		cp[k] = v
+	}
+	s.mu.Lock()
+	s.hosts = cp
+	s.hostOrder = append([]string(nil), order...)
+	s.mirrorLabels = make(map[string]string, len(labels))
+	for k, v := range labels {
+		s.mirrorLabels[k] = v
+	}
+	s.mu.Unlock()
+	s.Poke()
+}
+
 func (s *State) addMirror(r MirrorRecord) {
 	s.mu.Lock()
 	s.mirrors = append(s.mirrors, r)
@@ -419,8 +439,24 @@ func (s *State) Snapshot(job *store.Job, showStats bool) status.Snapshot {
 	}
 	if len(s.hosts) > 0 {
 		snap.Hosts = s.hosts
-		snap.HostOrder = []string{"gofile", "fileditch", "pixeldrain"}
-		snap.MirrorLabels = map[string]string{"gofile": "GoFile", "fileditch": "FileDitch", "pixeldrain": "Pixeldrain"}
+		if len(s.hostOrder) > 0 {
+			snap.HostOrder = append([]string(nil), s.hostOrder...)
+		} else {
+			for k := range s.hosts {
+				snap.HostOrder = append(snap.HostOrder, k)
+			}
+		}
+		if len(s.mirrorLabels) > 0 {
+			snap.MirrorLabels = make(map[string]string, len(s.mirrorLabels))
+			for k, v := range s.mirrorLabels {
+				snap.MirrorLabels[k] = v
+			}
+		} else {
+			snap.MirrorLabels = make(map[string]string, len(s.hosts))
+			for k := range s.hosts {
+				snap.MirrorLabels[k] = upload.HostID(k).Name()
+			}
+		}
 	}
 	if showStats {
 		st := status.ReadSystemStats()

@@ -1,5 +1,3 @@
-// Package upload implements uploads to third-party file hosts and per-user
-// API key storage.
 package upload
 
 import (
@@ -15,7 +13,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/config"
 )
 
-// Keys stores per-user host API keys at auth/<uid>/keys.json (mode 0600).
 type Keys struct {
 	cfg *config.Config
 	mu  sync.Mutex
@@ -65,14 +62,12 @@ func (k *Keys) write(uid int64, m map[string]string) error {
 	return os.Rename(tmp, path)
 }
 
-// Get returns the user's stored key for service, or "".
 func (k *Keys) Get(uid int64, service string) string {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.read(uid)[strings.ToLower(service)]
 }
 
-// All returns every stored key for the user.
 func (k *Keys) All(uid int64) map[string]string {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -95,7 +90,6 @@ func (k *Keys) Delete(uid int64, service string) error {
 	return k.write(uid, m)
 }
 
-// Resolve applies: personal key -> owner key (if shared keys allowed) -> "".
 func (k *Keys) Resolve(uid int64, service string) string {
 	service = strings.ToLower(service)
 	if uid > 0 {
@@ -104,10 +98,10 @@ func (k *Keys) Resolve(uid int64, service string) string {
 		}
 	}
 	if k.cfg.AllowSharedKeys {
-		switch service {
-		case "gofile":
+		switch HostID(service) {
+		case GoFile:
 			return k.cfg.GofileAPIKey
-		case "pixeldrain":
+		case Pixeldrain:
 			return k.cfg.PixeldrainAPIKey
 		}
 	}

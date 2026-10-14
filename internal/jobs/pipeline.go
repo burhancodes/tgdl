@@ -20,6 +20,7 @@ import (
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
+	"github.com/burhanverse/tgdl/internal/upload"
 )
 
 const (
@@ -314,6 +315,30 @@ func (m *Manager) processFile(st *State, root, f string, nested bool) {
 		rec := m.mirrorFile(st, f)
 		st.endUpload(key)
 		st.addMirror(rec)
+
+		hasSuccess := false
+		for _, u := range rec.Links {
+			if u != "" {
+				hasSuccess = true
+				break
+			}
+		}
+		if !hasSuccess {
+			var errMsgs []string
+			for _, h := range m.selectedHosts(args) {
+				if e := rec.Errors[string(h)]; e != "" {
+					errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", h.Name(), e))
+				}
+			}
+			st.addSkip(name, strings.Join(errMsgs, "; "))
+			st.markFailed(key)
+			if !args.UploadTG {
+				sent, skipped := st.counts()
+				_ = m.d.Store.UpdateProgress(context.Background(), job.ID, store2(sent, skipped))
+				return
+			}
+		}
+
 		if !args.UploadTG {
 			m.afterUpload(st, f, key)
 			return
@@ -649,23 +674,80 @@ func (m *Manager) maybeConvertAudio(st *State, f, root, key string) (string, str
 	return out, rel
 }
 
+func (m *Manager) selectedHosts(args dl.Args) []upload.HostID {
+	if len(args.MirrorHosts) > 0 {
+		var out []upload.HostID
+		for _, raw := range args.MirrorHosts {
+			parsed, err := upload.ParseHosts(raw)
+			if err == nil {
+				out = append(out, parsed...)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	cfgHosts := ""
+	if m.d.Cfg != nil {
+		cfgHosts = m.d.Cfg.MirrorHosts
+	}
+	return upload.EnabledHosts(cfgHosts)
+}
+
 func (m *Manager) mirrorFile(st *State, path string) MirrorRecord {
-	const tenGB = 10 << 30
 	uid := st.Args().UserIDInt()
 	info, _ := os.Stat(path)
-	hosts := map[string]status.HostState{
-		"gofile": {Status: "pending"}, "fileditch": {Status: "pending"}, "pixeldrain": {Status: "pending"},
+	fileSize := int64(0)
+	if info != nil {
+		fileSize = info.Size()
 	}
-	if info != nil && info.Size() > tenGB {
-		hosts["pixeldrain"] = status.HostState{Status: "skipped"}
-	}
-	rec := MirrorRecord{File: filepath.Base(path), Links: map[string]string{}}
 
-	type hostFn func(ctx context.Context, cb func(cur, total int64)) (string, error)
-	run := func(key string, fn hostFn) {
-		if hosts[key].Status == "skipped" || st.ctx.Err() != nil {
-			return
+	selected := m.selectedHosts(st.Args())
+	hosts := make(map[string]status.HostState, len(selected))
+	var hostOrder []string
+	labels := make(map[string]string, len(selected))
+
+	for _, h := range selected {
+		k := string(h)
+		hostOrder = append(hostOrder, k)
+		labels[k] = h.Name()
+		if limit := h.MaxBytes(); limit > 0 && fileSize > limit {
+			reason := fmt.Sprintf("too large for %s (10 GiB limit)", h.Name())
+			hosts[k] = status.HostState{Status: "skipped", Error: reason}
+		} else {
+			hosts[k] = status.HostState{Status: "pending"}
 		}
+	}
+
+	st.setHostsWithOrder(hosts, hostOrder, labels)
+
+	fn := st.FileName(path)
+	displayName := fn.Display
+	if displayName == "" {
+		displayName = filepath.Base(path)
+	}
+
+	rec := MirrorRecord{
+		File:   displayName,
+		Links:  map[string]string{},
+		Errors: map[string]string{},
+	}
+
+	retries := 3
+	if m.d.Cfg != nil && m.d.Cfg.MirrorRetries >= 0 {
+		retries = m.d.Cfg.MirrorRetries
+	}
+
+	for _, h := range selected {
+		k := string(h)
+		if hosts[k].Status == "skipped" {
+			rec.Errors[k] = hosts[k].Error
+			continue
+		}
+		if st.ctx.Err() != nil {
+			break
+		}
+
 		var lastAt time.Time
 		var lastB int64
 		var speed float64
@@ -681,30 +763,25 @@ func (m *Manager) mirrorFile(st *State, path string) MirrorRecord {
 			if total > 0 {
 				pct = float64(cur) / float64(total) * 100
 			}
-			hosts[key] = status.HostState{Status: "uploading", Pct: pct, Speed: speed}
-			st.setHosts(hosts)
+			hosts[k] = status.HostState{Status: "uploading", Pct: pct, Speed: speed}
+			st.setHostsWithOrder(hosts, hostOrder, labels)
 		}
-		hosts[key] = status.HostState{Status: "uploading"}
-		st.setHosts(hosts)
-		link, err := fn(st.ctx, cb)
+
+		hosts[k] = status.HostState{Status: "uploading"}
+		st.setHostsWithOrder(hosts, hostOrder, labels)
+
+		link, err := m.d.Hosts.UploadWithRetry(st.ctx, h, path, displayName, uid, retries, cb)
 		if err != nil {
-			slog.Warn("mirror upload failed", "host", key, "file", rec.File, "err", err)
-			hosts[key] = status.HostState{Status: "failed", Error: err.Error()}
+			slog.Warn("mirror upload failed", "host", k, "file", displayName, "err", err)
+			hosts[k] = status.HostState{Status: "failed", Error: err.Error()}
+			rec.Errors[k] = err.Error()
 		} else {
-			hosts[key] = status.HostState{Status: "done", URL: link}
-			rec.Links[key] = link
+			hosts[k] = status.HostState{Status: "done", URL: link}
+			rec.Links[k] = link
 		}
-		st.setHosts(hosts)
+		st.setHostsWithOrder(hosts, hostOrder, labels)
 	}
-	run("gofile", func(ctx context.Context, cb func(int64, int64)) (string, error) {
-		return m.d.Hosts.Gofile(ctx, path, uid, cb)
-	})
-	run("fileditch", func(ctx context.Context, cb func(int64, int64)) (string, error) {
-		return m.d.Hosts.Fileditch(ctx, path, false, cb)
-	})
-	run("pixeldrain", func(ctx context.Context, cb func(int64, int64)) (string, error) {
-		return m.d.Hosts.Pixeldrain(ctx, path, uid, cb)
-	})
+
 	return rec
 }
 

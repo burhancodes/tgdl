@@ -11,8 +11,9 @@ var helpPages = map[string]string{
 		"• <code>/gofile [-m] [-tg] [-uz] &lt;url…&gt;</code> or <code>/gfdl</code> — GoFile bypass proxy links\n" +
 		"• <code>/gdl</code> — gallery-dl (reply to a .txt of links for batches)\n" +
 		"• <code>/cdl</code> — cyberdrop-dl\n" +
-		"• <code>/m [-tg]</code> — mirror a link or replied file to GoFile, FileDitch and Pixeldrain\n" +
-		"<code>-m</code> mirrors to web hosts, <code>-tg</code> also uploads to Telegram, <code>-uz</code> extracts archives.",
+		"• <code>/m [-to hosts] [-tg] [-uz]</code> — mirror to enabled hosts (or specific with -to)\n" +
+		"• <code>/gofile</code>, <code>/fileditch</code>, <code>/pixeldrain</code> — mirror to a specific host\n" +
+		"<code>-to</code> selects mirror hosts (e.g. -to gofile,pd), <code>-m</code> mirrors to web hosts, <code>-tg</code> also uploads to Telegram, <code>-uz</code> extracts archives.",
 	"tor": "<b>Torrents &amp; aria2</b>\n" +
 		"• <code>/tor &lt;magnet | .torrent URL&gt;</code> or reply to a .torrent file\n" +
 		"• <code>/aria &lt;url&gt; [-c N] [-s N] [--header 'K: V'] [--out NAME] [--opt k=v]</code>\n" +
@@ -25,7 +26,7 @@ var helpPages = map[string]string{
 		"• <code>/gd2tg &lt;link&gt;</code> — Google Drive file or folder (or reply with credentials .json)\n" +
 		"• <code>/mega &lt;link&gt;</code> — MEGA file or folder\n" +
 		"• <code>/gofile &lt;link&gt;</code> — GoFile download via bypass proxy\n" +
-		"• <code>/gfup</code>, <code>/fileditch</code>, <code>/pdup</code> — upload a replied file\n" +
+		"• <code>/m</code>, <code>/gofile</code>, <code>/fileditch</code>, <code>/pixeldrain</code> (aliases: <code>/gf</code>, <code>/fd</code>, <code>/pd</code>) — mirror URLs or replied files\n" +
 		"• <code>/gofilekey</code>, <code>/pdkey</code> — store your personal API keys",
 	"cookies": "<b>Cookies</b>\n" +
 		"• <code>/cookies</code> — reply to cookies.txt to save it (used by gallery-dl and cyberdrop-dl)\n" +

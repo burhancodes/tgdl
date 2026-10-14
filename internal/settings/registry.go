@@ -524,6 +524,26 @@ var defaultSpecs = []*Spec{
 		Default:     "gf.1drv.eu.org",
 		Apply:       ApplyLive,
 	},
+	{
+		Key:         "MIRROR_HOSTS",
+		Group:       GroupUploadHosts,
+		Description: "Enabled mirror upload hosts (comma-separated: gofile, fileditch, pixeldrain)",
+		Type:        "string",
+		Default:     "gofile,fileditch,pixeldrain",
+		Apply:       ApplyLive,
+		Validate:    ValidateMirrorHosts,
+	},
+	{
+		Key:         "MIRROR_RETRIES",
+		Group:       GroupUploadHosts,
+		Description: "Max retries per host for mirror uploads on network/5xx/429 errors",
+		Type:        "int",
+		Default:     "3",
+		Min:         0,
+		Max:         10,
+		Apply:       ApplyLive,
+		Validate:    ValidateIntRange(0, 10),
+	},
 
 	{
 		Key:         "GDRIVE_TOKEN_PATH",

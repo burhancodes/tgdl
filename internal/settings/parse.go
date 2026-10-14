@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/burhanverse/tgdl/internal/upload"
 )
 
 func ParseBytes(raw string) (int64, error) {
@@ -202,6 +204,11 @@ func ValidateBoolValue(s string) error {
 
 func ValidateIDListValue(s string) error {
 	_, err := ParseIDList(s)
+	return err
+}
+
+func ValidateMirrorHosts(s string) error {
+	_, err := upload.ParseHosts(s)
 	return err
 }
 

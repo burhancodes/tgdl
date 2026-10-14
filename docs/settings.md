@@ -174,6 +174,8 @@ Settings commands and callbacks are strictly restricted to the bot owner (`OWNER
 | `PIXELDRAIN_DOMAIN` | `enum` | `pixeldrain.com` | Live | Domain endpoint for Pixeldrain links |
 | `GOFILE_API_KEY` | `secret` | `*(empty)*` | Live | API key for GoFile uploads |
 | `GOFILE_BYPASS_HOST` | `string` | `gf.1drv.eu.org` | Live | Bypass proxy host for GoFile direct downloads |
+| `MIRROR_HOSTS` | `string` | `gofile,fileditch,pixeldrain` | Live | Enabled mirror upload hosts (comma-separated: gofile, fileditch, pixeldrain) |
+| `MIRROR_RETRIES` | `int` | `3` | Live | Max retries per host for mirror uploads on network/5xx/429 errors |
 
 ### Cloud (Drive/MEGA)
 

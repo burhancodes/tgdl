@@ -17,7 +17,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/auth"
 	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/dl"
-	"github.com/burhanverse/tgdl/internal/fsutil"
 	"github.com/burhanverse/tgdl/internal/jobs"
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/settings"
@@ -27,7 +26,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/torrent"
 	"github.com/burhanverse/tgdl/internal/upload"
-	"golang.org/x/sync/semaphore"
 )
 
 type App struct {
@@ -43,7 +41,6 @@ type App struct {
 	lim            *pacing.TelegramLimiter
 	runner         *dl.Runner
 	telegraph      *telegraph.Helper
-	hostUploadSem  *semaphore.Weighted
 	botID          int64
 	renameSessions *RenameSessionManager
 	settingsMgr    *settings.Manager
@@ -69,10 +66,6 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	if tele == nil {
 		tele = telegraph.NewHelper()
 	}
-	semLimit := int64(1)
-	if d.Cfg != nil && d.Cfg.MaxConcurrentDL > 0 {
-		semLimit = int64(d.Cfg.MaxConcurrentDL)
-	}
 	var botID int64
 	if d.Cfg != nil {
 		botID = parseBotID(d.Cfg.BotToken)
@@ -83,7 +76,7 @@ func New(d Deps, b *tgbot.Bot, api *tg.BotAPI) *App {
 	}
 	a := &App{cfg: d.Cfg, auth: d.Auth, store: d.Store, mgr: d.Mgr, tg: api, api: api,
 		keys: d.Keys, hosts: d.Hosts, search: d.Search, lim: d.Lim, runner: d.Runner, telegraph: tele,
-		hostUploadSem: semaphore.NewWeighted(semLimit), botID: botID,
+		botID:          botID,
 		renameSessions: NewRenameSessionManager(d.Cfg, api),
 		settingsMgr:    d.SettingsMgr, settingsUI: setUI}
 	a.register(b)
@@ -94,38 +87,6 @@ func (a *App) Stop() {
 	if a.renameSessions != nil {
 		a.renameSessions.Stop()
 	}
-}
-
-func (a *App) queueHostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, host string) {
-	if a.cfg != nil {
-		free, err := fsutil.FreeDiskSpace(a.cfg.DownloadsDir())
-		if err == nil {
-			need := uint64(a.cfg.MinFreeDiskBytes)
-			if f.Size > 0 {
-				need += uint64(f.Size)
-			}
-			if free < need {
-				a.reply(ctx, m, fmt.Sprintf("Upload aborted: insufficient disk space on server (less than %s free).", status.Size(float64(a.cfg.MinFreeDiskBytes))))
-				return
-			}
-		}
-	}
-	go func() {
-		bgCtx := context.WithoutCancel(ctx)
-		if a.hostUploadSem != nil {
-			if !a.hostUploadSem.TryAcquire(1) {
-				ref, _ := a.tg.Send(bgCtx, m.Chat.ID, "Upload queued… waiting for active downloads/uploads to finish.", tg.SendOpts{ReplyTo: m.ID})
-				if err := a.hostUploadSem.Acquire(bgCtx, 1); err != nil {
-					return
-				}
-				if ref.Valid() {
-					_ = a.tg.Delete(bgCtx, ref)
-				}
-			}
-			defer a.hostUploadSem.Release(1)
-		}
-		a.hostUpload(bgCtx, m, f, host)
-	}()
 }
 
 func parseBotID(token string) int64 {
@@ -266,7 +227,11 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"start", "help"}, a.cmdHelp)
 	cmd([]string{"status"}, a.cmdStatus)
 	cmd([]string{"cancel"}, a.cmdCancel)
-	cmd([]string{"m", "mirror"}, a.cmdMirror)
+	cmd([]string{"m", "mirror"}, a.cmdMirrorTo(nil))
+	cmd([]string{"gofile", "gf", "gfup"}, a.cmdMirrorTo([]upload.HostID{upload.GoFile}))
+	cmd([]string{"fileditch", "fd", "fdup"}, a.cmdMirrorTo([]upload.HostID{upload.FileDitch}))
+	cmd([]string{"pixeldrain", "pd", "pdup"}, a.cmdMirrorTo([]upload.HostID{upload.Pixeldrain}))
+	cmd([]string{"gfdl", "gf2tg"}, a.cmdGofileDL)
 	cmd([]string{"dl", "direct"}, a.cmdDirect)
 	cmd([]string{"gdl", "gallerydl"}, a.cmdEngine("gallery-dl", "gdl"))
 	cmd([]string{"cdl", "cyberdropdl"}, a.cmdEngine("cyberdrop-dl", "cdl"))
@@ -276,9 +241,6 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"ts"}, a.cmdTorrentSearch)
 	cmd([]string{"gd2tg", "gdrive", "gd"}, a.cmdDrive)
 	cmd([]string{"unzip"}, a.cmdUnzip)
-	cmd([]string{"pdup"}, a.cmdHostUpload("pixeldrain"))
-	cmd([]string{"gofile", "gfup", "gfdl", "gf2tg"}, a.cmdGofile)
-	cmd([]string{"fileditch", "fdup"}, a.cmdHostUpload("fileditch"))
 	cmd([]string{"gofilekey", "gofile_key"}, a.cmdKey("gofile", "GoFile"))
 	cmd([]string{"pdkey", "pixeldrainkey", "pd_key"}, a.cmdKey("pixeldrain", "Pixeldrain"))
 	cmd([]string{"cookies"}, a.cmdCookies)
@@ -532,6 +494,7 @@ func isURLToken(t string) bool {
 type flags struct {
 	Mirror, TG, Unzip bool
 	Password          string
+	ToHosts           string
 	URLs              []string
 	Extra             []string
 }
@@ -549,6 +512,13 @@ func parseFlags(toks []string) flags {
 			f.TG = true
 		case low == "-uz" || low == "-unzip" || low == "--unzip":
 			f.Unzip = true
+		case low == "-to" || low == "--to":
+			if i+1 < len(toks) && !strings.HasPrefix(toks[i+1], "-") {
+				i++
+				f.ToHosts = strings.TrimSpace(toks[i])
+			}
+		case strings.HasPrefix(low, "-to=") || strings.HasPrefix(low, "--to="):
+			f.ToHosts = strings.TrimSpace(t[strings.Index(t, "=")+1:])
 		case low == "-p" || low == "-pass" || low == "--pass" || low == "--password":
 			if i+1 < len(toks) && !strings.HasPrefix(toks[i+1], "-") {
 				i++

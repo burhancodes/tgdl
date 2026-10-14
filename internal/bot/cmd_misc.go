@@ -156,76 +156,6 @@ func (a *App) cmdKey(service, label string) tgbot.HandlerFunc {
 	}
 }
 
-func (a *App) cmdHostUpload(host string) tgbot.HandlerFunc {
-	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
-		m := u.Message
-		_, f := mediaSource(m)
-		if f == nil {
-			a.reply(ctx, m, "Reply to a Telegram file with this command to upload it.")
-			return
-		}
-		a.queueHostUpload(ctx, m, f, host)
-	}
-}
-
-func (a *App) hostUpload(ctx context.Context, m *models.Message, f *dl.TGFile, host string) {
-	ref, err := a.tg.Send(ctx, m.Chat.ID, fmt.Sprintf("Downloading %s…", code(f.Name)), tg.SendOpts{ReplyTo: m.ID})
-	if err != nil {
-		return
-	}
-	dir, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_up_")
-	if err != nil {
-		_ = a.tg.Edit(ctx, ref, "Upload failed: "+code(err.Error()), tg.SendOpts{})
-		return
-	}
-	defer os.RemoveAll(dir)
-	if a.mgr != nil {
-		release := a.mgr.RegisterTempDir(dir)
-		defer release()
-	}
-
-	var last time.Time
-	edit := func(text string) {
-		if time.Since(last) < 3*time.Second {
-			return
-		}
-		last = time.Now()
-		if err := a.lim.Acquire(ctx, m.Chat.ID); err == nil {
-			_ = a.tg.Edit(ctx, ref, text, tg.SendOpts{})
-		}
-	}
-	path, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dir, func(cur, total int64) {
-		edit(fmt.Sprintf("Downloading %s… %.1f%%", code(f.Name), pct(cur, total)))
-	})
-	if err != nil {
-		_ = a.tg.Edit(ctx, ref, "Download failed: "+code(err.Error()), tg.SendOpts{})
-		return
-	}
-	up := func(cur, total int64) { edit(fmt.Sprintf("Uploading to %s… %.1f%%", host, pct(cur, total))) }
-	uid := userID(m)
-	var link string
-	switch host {
-	case "pixeldrain":
-		link, err = a.hosts.Pixeldrain(ctx, path, uid, up)
-	case "gofile":
-		link, err = a.hosts.Gofile(ctx, path, uid, up)
-	default:
-		link, err = a.hosts.Fileditch(ctx, path, false, up)
-	}
-	if err != nil {
-		_ = a.tg.Edit(ctx, ref, "Upload failed: "+code(err.Error()), tg.SendOpts{})
-		return
-	}
-	_ = a.tg.Edit(ctx, ref, fmt.Sprintf("<b>Uploaded to %s</b>\n%s\n%s", host, code(f.Name), esc(link)), tg.SendOpts{})
-}
-
-func pct(cur, total int64) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(cur) / float64(total) * 100
-}
-
 func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	m := u.Message
 	uid := userID(m)
@@ -245,16 +175,12 @@ func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		return
 	}
 	if _, f := mediaSource(m); f != nil {
-		tmp, err := os.MkdirTemp(a.cfg.DownloadsDir(), "tmp_up_")
+		tmp, err := os.MkdirTemp(a.cfg.DownloadsDir(), "cookies_")
 		if err != nil {
 			a.reply(ctx, m, "Storage error: "+code(err.Error()))
 			return
 		}
 		defer os.RemoveAll(tmp)
-		if a.mgr != nil {
-			release := a.mgr.RegisterTempDir(tmp)
-			defer release()
-		}
 		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmp, nil)
 		if err != nil {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))

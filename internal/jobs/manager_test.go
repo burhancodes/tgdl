@@ -41,8 +41,8 @@ func TestCleanupOrphans(t *testing.T) {
 		deadJob.DownloadDir(),
 		deadJob.DownloadDir() + "_extract",
 		deadJob.MirrorTempDirName(),
-		"tmp_up_abc",
-		"tmp_up_active",
+		"job_orphaned_abc",
+		"job_active_temp",
 		"important_folder",
 	}
 
@@ -55,7 +55,7 @@ func TestCleanupOrphans(t *testing.T) {
 		_ = os.Chtimes(p, oldTime, oldTime)
 	}
 
-	release := m.RegisterTempDir(filepath.Join(downloads, "tmp_up_active"))
+	release := m.RegisterTempDir(filepath.Join(downloads, "job_active_temp"))
 
 	keep := []*store.Job{liveJob}
 
@@ -65,7 +65,7 @@ func TestCleanupOrphans(t *testing.T) {
 		liveJob.DownloadDir():              true,
 		liveJob.DownloadDir() + "_extract": true,
 		liveJob.MirrorTempDirName():        true,
-		"tmp_up_active":                    true,
+		"job_active_temp":                  true,
 		"important_folder":                 true,
 	}
 
@@ -73,7 +73,7 @@ func TestCleanupOrphans(t *testing.T) {
 		deadJob.DownloadDir(),
 		deadJob.DownloadDir() + "_extract",
 		deadJob.MirrorTempDirName(),
-		"tmp_up_abc",
+		"job_orphaned_abc",
 	}
 
 	for d := range shouldExist {
@@ -92,9 +92,9 @@ func TestCleanupOrphans(t *testing.T) {
 
 	release()
 	m.cleanupOrphans(keep)
-	activePath := filepath.Join(downloads, "tmp_up_active")
+	activePath := filepath.Join(downloads, "job_active_temp")
 	if _, err := os.Stat(activePath); err == nil {
-		t.Errorf("expected tmp_up_active to be deleted after release, but still exists")
+		t.Errorf("expected job_active_temp to be deleted after release, but still exists")
 	}
 }
 

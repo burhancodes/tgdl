@@ -52,6 +52,7 @@ type Args struct {
 	RenameScheme     string         `json:"rename_scheme,omitempty"`
 	RenameNames      []string       `json:"rename_names,omitempty"`
 	RenameFiles      []TGFile       `json:"rename_files,omitempty"`
+	MirrorHosts      []string       `json:"mirror_hosts,omitempty"`
 }
 
 type TGFile struct {
@@ -104,13 +105,22 @@ func toString(v any) string {
 }
 
 func FirstURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	prefix := ""
+	for _, p := range []string{"mirror:", "direct:", "cdl:", "cyberdrop-dl:", "gdrive:", "gd2tg:", "gofile:"} {
+		if strings.HasPrefix(raw, p) {
+			prefix = p
+			raw = strings.TrimPrefix(raw, p)
+			break
+		}
+	}
 	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
 		var list []string
 		if json.Unmarshal([]byte(raw), &list) == nil && len(list) > 0 {
-			return list[0]
+			return prefix + list[0]
 		}
 	}
-	return raw
+	return prefix + raw
 }
 
 type Canceller struct {

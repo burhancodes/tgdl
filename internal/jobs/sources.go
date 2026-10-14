@@ -370,10 +370,14 @@ func (mirrorSource) Name() string          { return "mirror" }
 func (mirrorSource) Match(r *Request) bool { return strings.HasPrefix(r.URL, "mirror:") }
 func (mirrorSource) DiskMonitored() bool   { return false }
 func (s mirrorSource) Fetch(ctx context.Context, r *Request) dl.Result {
-	target := strings.TrimPrefix(r.URL, "mirror:")
+	target := strings.TrimPrefix(r.Job.URL, "mirror:")
 	r.St.SetEngine("Direct HTTP")
 	d := dl.NewDirect(s.d.Cfg, r.St.Bytes)
 	if files, err := d.Download(ctx, r.Dest, target); err == nil {
+		for p, fn := range d.FileNames {
+			r.St.SetFileName(p, fn)
+			_ = s.d.Store.SaveFileName(ctx, r.Job.ID, fn.Disk, fn.Display)
+		}
 		return dl.Result{OK: true, Files: files}
 	} else if ctx.Err() != nil {
 		return fail("cancelled")
