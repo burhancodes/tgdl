@@ -1,31 +1,30 @@
-/**
- * Provider aggregator -- runs all enabled scrapers in parallel
- * and returns a unified, deduplicated list of torrent records.
- */
 import pLimit from 'p-limit';
-import * as yts from './yts.js';
-import * as eztv from './eztv.js';
-import * as thepiratebay from './thepiratebay.js';
-import * as torrentgalaxy from './torrentgalaxy.js';
-import * as leetx from './leetx.js';
-import * as kickasstorrents from './kickasstorrents.js';
-import * as nyaa from './nyaa.js';
-import * as animesaturn from './animesaturn.js';
-import * as rutor from './rutor.js';
-import * as rutracker from './rutracker.js';
-import * as limetorrents from './limetorrents.js';
-import * as bitsearch from './bitsearch.js';
-import * as bt4g from './bt4g.js';
-import * as btdig from './btdig.js';
-import * as glotorrents from './glotorrents.js';
-import * as torlock from './torlock.js';
+import * as yts              from './yts.js';
+import * as eztv             from './eztv.js';
+import * as thepiratebay     from './thepiratebay.js';
+import * as torrentgalaxy    from './torrentgalaxy.js';
+import * as leetx            from './leetx.js';
+import * as kickasstorrents  from './kickasstorrents.js';
+import * as nyaa             from './nyaa.js';
+import * as animesaturn      from './animesaturn.js';
+import * as rutor            from './rutor.js';
+import * as rutracker        from './rutracker.js';
+import * as limetorrents     from './limetorrents.js';
+import * as bitsearch        from './bitsearch.js';
+import * as knaben           from './knaben.js';
+import * as bt4g             from './bt4g.js';
+import * as btdig            from './btdig.js';
+import * as glotorrents      from './glotorrents.js';
+import * as torlock          from './torlock.js';
 import * as torrentdownloads from './torrentdownloads.js';
-import * as therarbg from './therarbg.js';
-import * as subsplease from './subsplease.js';
-import * as animetosho from './animetosho.js';
-import * as nekobt from './nekobt.js';
-import * as torznab from './torznab.js';
+import * as therarbg         from './therarbg.js';
+import * as subsplease       from './subsplease.js';
+import * as animetosho       from './animetosho.js';
+import * as nekobt           from './nekobt.js';
+import * as tokyotosho       from './tokyotosho.js';
+import * as torznab          from './torznab.js';
 import { logger } from '../lib/logger.js';
+import { isSkipped } from '../lib/providerHealth.js';
 
 const ALL_PROVIDERS = [
   yts,
@@ -40,6 +39,7 @@ const ALL_PROVIDERS = [
   rutracker,
   limetorrents,
   bitsearch,
+  knaben,
   bt4g,
   btdig,
   glotorrents,
@@ -49,52 +49,64 @@ const ALL_PROVIDERS = [
   subsplease,
   animetosho,
   nekobt,
+  tokyotosho,
   torznab,
 ];
 
-// Providers disabled on this host via env (comma-separated provider ids), e.g.
-// SCRAPER_DISABLED_PROVIDERS=glotorrents,kickasstorrents,1337x
-// Disabled providers are skipped even when a client explicitly requests them.
 const DISABLED_PROVIDERS = new Set(
-  (process.env.SCRAPER_DISABLED_PROVIDERS ?? '')
-    .split(',')
+  (process.env.SCRAPER_DISABLED_PROVIDERS ?? "")
+    .split(",")
     .map(s => s.trim().toLowerCase())
     .filter(Boolean)
 );
 const ACTIVE_PROVIDERS = ALL_PROVIDERS.filter(p => !DISABLED_PROVIDERS.has(p.id));
 if (DISABLED_PROVIDERS.size) {
-  logger.info(`Disabled providers: ${[...DISABLED_PROVIDERS].join(', ')}`);
+  logger.info(`Disabled providers: ${[...DISABLED_PROVIDERS].join(", ")}`);
 }
 
 const limit = pLimit(Math.max(1, parseInt(process.env.SCRAPER_CONCURRENCY ?? '12', 10) || 12));
-const PROVIDER_TIMEOUT_MS = parseInt(process.env.SCRAPER_PROVIDER_TIMEOUT_MS ?? '15000', 10);
-const HARD_TIMEOUT_MS     = parseInt(process.env.SCRAPER_HARD_TIMEOUT_MS     ?? String(PROVIDER_TIMEOUT_MS + 2000), 10);
+
+const PROVIDER_TIMEOUT_MS = parseInt(process.env.SCRAPER_PROVIDER_TIMEOUT_MS ?? '12000', 10);
+const HARD_TIMEOUT_MS     = parseInt(process.env.SCRAPER_HARD_TIMEOUT_MS     ?? '20000', 10);
 const EARLY_RETURN_MS     = parseInt(process.env.SCRAPER_EARLY_RETURN_MS     ?? '6000', 10);
 const MIN_EARLY_RESULTS   = parseInt(process.env.SCRAPER_MIN_EARLY_RESULTS   ?? '10', 10);
 
-/**
- * Scrape all (or a subset of) providers for a given content item.
- * Uses early-return: responds after EARLY_RETURN_MS if enough results
- * are collected, without waiting for slow providers.
- *
- * @param {string}   type        'movie' | 'series' | 'anime'
- * @param {object}   meta        From cinemeta: { name, year, imdbId, season, episode }
- * @param {string[]} providerIds Optional whitelist of provider IDs
- * @param {object}   context     Optional per-request context (e.g. { torznabUrl, torznabApiKey, strict })
- * @param {boolean}  [strict]    Whether to filter by content phrase match (default true, unless context.strict is specified)
- * @returns {Promise<TorrentRecord[]>}
- */
-export async function scrapeAll(type, meta, providerIds = null, context = {}, strict = undefined) {
-  const isStrict = context?.strict !== undefined ? Boolean(context.strict) : (strict !== undefined ? Boolean(strict) : true);
-  const providers = ACTIVE_PROVIDERS.filter(p =>
+const MAX_ALIAS_QUERIES = parseInt(process.env.SCRAPER_MAX_ALIAS_QUERIES ?? '1', 10);
+const MAX_TAG_QUERIES   = parseInt(process.env.SCRAPER_MAX_TAG_QUERIES   ?? '1', 10);
+
+const YEAR_SLACK = 1;
+const YEAR_IN_NAME = /\b(?:19|20)\d{2}\b/g;
+
+export async function scrapeAll(type, meta, providerIds = null, context = {}) {
+  const requested = ACTIVE_PROVIDERS.filter(p =>
     !providerIds || providerIds.includes(p.id)
   );
+
+  const providers = requested.filter(p => !isSkipped(p.id));
+  const skipped = requested.filter(p => isSkipped(p.id)).map(p => p.id);
+  if (skipped.length) {
+    logger.info(`Skipping providers that are currently failing: ${skipped.join(', ')}`);
+  }
+
+  const queries = queryVariants(meta);
+  const jobs = providers.flatMap(p =>
+    queries.map(({ meta: query, localized }) => ({
+      provider: p,
+      query,
+      localized,
+      label: localized ? `${p.name} "${query.name}"` : p.name,
+    }))
+  );
+  if (queries.length > 1) {
+    logger.info(`Extra search passes: ${queries.slice(1).map(q => `"${q.meta.name}"`).join(', ')}`);
+  }
 
   const collected = [];
   let matchedCount = 0;
   let resolved = false;
   const startedAt = Date.now();
   let completedCount = 0;
+  let pendingLocalized = jobs.filter(j => j.localized).length;
 
   return new Promise((resolve) => {
     const finalize = () => {
@@ -103,64 +115,90 @@ export async function scrapeAll(type, meta, providerIds = null, context = {}, st
       clearTimeout(earlyTimer);
       clearTimeout(hardTimer);
 
-      logger.info(`Scrape totals: ${collected.length} raw, ${completedCount}/${providers.length} providers responded`);
+      logger.info(`Scrape totals: ${collected.length} raw, ${completedCount}/${jobs.length} searches responded`);
       const deduped = deduplicate(collected);
-      const matched = isStrict ? filterByContent(deduped, meta) : deduped;
+      const matched = filterByContent(deduped, meta);
       if (deduped.length !== matched.length) {
         logger.info(`Content filter: ${deduped.length} -> ${matched.length} (dropped ${deduped.length - matched.length} unrelated)`);
       }
       resolve(matched);
     };
 
-    // Early return: after EARLY_RETURN_MS, return if we have enough results.
-    // Counts only results that pass the content filter, so a provider that
-    // dumps an unrelated feed can't trigger an early return that ends empty.
     const earlyTimer = setTimeout(() => {
-      if (!resolved && matchedCount >= MIN_EARLY_RESULTS) {
-        logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${providers.length} providers after ${EARLY_RETURN_MS}ms`);
+      if (!resolved && !pendingLocalized && matchedCount >= MIN_EARLY_RESULTS) {
+        logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${jobs.length} searches after ${EARLY_RETURN_MS}ms`);
         finalize();
       }
     }, EARLY_RETURN_MS);
 
-    // Hard deadline: cut off after HARD_TIMEOUT_MS even if providers are still pending
     const hardTimer = setTimeout(() => {
       if (!resolved) {
-        logger.info(`Hard timeout: ${collected.length} results from ${completedCount}/${providers.length} providers after ${HARD_TIMEOUT_MS}ms`);
+        logger.info(`Hard timeout: ${collected.length} results from ${completedCount}/${jobs.length} searches after ${HARD_TIMEOUT_MS}ms`);
         finalize();
       }
     }, HARD_TIMEOUT_MS);
 
-    // Launch all providers in parallel (concurrency-limited)
-    const tasks = providers.map(p =>
+    const tasks = jobs.map(({ provider: p, query, label, localized }) =>
       limit(async () => {
         if (resolved) return;
         const start = Date.now();
         try {
+          const scrapeType = (!type || type === 'all')
+            ? (p.types?.includes('movie') ? 'movie' : (p.types?.[0] ?? 'movie'))
+            : type;
           const results = await withTimeout(
-            p.scrape({ ...meta, ...context, type }),
+            p.scrape({ ...query, ...context, type: scrapeType }),
             PROVIDER_TIMEOUT_MS,
             `${p.name} timed out`
           );
-          logger.info(`[${p.name}] ${results.length} results in ${Date.now() - start}ms`);
-          collected.push(...results);
-          matchedCount += (isStrict ? filterByContent(results, meta).length : results.length);
+          const kept = localized ? filterByYear(results, meta) : results;
+          logger.info(`[${label}] ${kept.length} results in ${Date.now() - start}ms`);
+          collected.push(...kept);
+          matchedCount += filterByContent(kept, meta).length;
         } catch (err) {
-          logger.warn(`[${p.name}] ${err.message} (${Date.now() - start}ms)`);
+          logger.warn(`[${label}] ${err.message} (${Date.now() - start}ms)`);
         } finally {
           completedCount++;
-          // If all providers finished, return immediately
-          if (completedCount >= providers.length) finalize();
-          // Past the early-return window: return as soon as enough results land
-          else if (Date.now() - startedAt >= EARLY_RETURN_MS && matchedCount >= MIN_EARLY_RESULTS) {
-            logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${providers.length} providers after ${Date.now() - startedAt}ms`);
+          if (localized) pendingLocalized--;
+          if (completedCount >= jobs.length) finalize();
+          else if (!pendingLocalized && Date.now() - startedAt >= EARLY_RETURN_MS && matchedCount >= MIN_EARLY_RESULTS) {
+            logger.info(`Early return: ${matchedCount} matching results from ${completedCount}/${jobs.length} searches after ${Date.now() - startedAt}ms`);
             finalize();
           }
         }
       })
     );
 
-    // Safety: if Promise.all somehow resolves before timers
     Promise.allSettled(tasks).then(finalize);
+  });
+}
+
+export function queryVariants(meta) {
+  const variants = [{ meta, localized: false }];
+  if (!meta?.name) return variants;
+
+  for (const alias of (meta.aliases ?? []).slice(0, Math.max(0, MAX_ALIAS_QUERIES))) {
+    variants.push({ meta: { ...meta, name: alias, year: null }, localized: true });
+  }
+  for (const tag of (meta.searchTags ?? []).slice(0, Math.max(0, MAX_TAG_QUERIES))) {
+    variants.push({ meta: { ...meta, name: `${meta.name} ${tag}`, year: null }, localized: true });
+  }
+  return variants;
+}
+
+export function filterByYear(records, meta) {
+  if (meta?.type !== 'movie' || !meta.year) return records;
+  const year = Number(meta.year);
+  if (!Number.isFinite(year)) return records;
+
+  const inTitle = new Set(
+    [meta.name, ...(meta.aliases ?? [])].flatMap(n => String(n ?? '').match(YEAR_IN_NAME) ?? [])
+  );
+
+  return records.filter(r => {
+    const years = (String(r.title ?? '').match(YEAR_IN_NAME) ?? []).filter(y => !inTitle.has(y));
+    if (!years.length) return true;
+    return years.some(y => Math.abs(Number(y) - year) <= YEAR_SLACK);
   });
 }
 
@@ -177,9 +215,6 @@ async function withTimeout(promise, timeoutMs, message) {
   }
 }
 
-/**
- * Deduplicate by infoHash, keeping the entry with the highest seeder count.
- */
 function deduplicate(records) {
   const map = new Map();
   for (const r of records) {
@@ -192,42 +227,19 @@ function deduplicate(records) {
   return Array.from(map.values());
 }
 
-/**
- * Filter out torrents whose title does not match the requested content.
- * For series: title must contain a season/episode marker matching the request.
- * For movies: title must contain at least part of the movie name.
- * Torznab records matched by IMDb ID skip the name check, and only fail the
- * series check on an explicit marker for another season or episode: the
- * indexer already got the ID (plus season and episode), and their titles are
- * often localized.
- */
 export function filterByContent(records, meta) {
   if (!meta?.name) return records;
 
-  const nameWords = normalizeTitle(meta.name).split(/\s+/).filter(w => w.length > 1);
-  if (!nameWords.length) return records;
-
-  const phrasePattern = nameWords.map(escapeRegex).join('\\s+');
-  const phraseRegex = new RegExp(`\\b${phrasePattern}\\b`);
+  const matchers = [meta.name, ...(meta.aliases ?? [])]
+    .map(name => buildNameMatcher(name, meta.year))
+    .filter(Boolean);
+  if (!matchers.length) return records;
 
   return records.filter(r => {
     if (!r.title) return false;
     const norm = normalizeTitle(r.title);
 
-    if (r.matchedById) {
-      // Matched by ID upstream; skip the name check.
-    } else if (nameWords.length <= 2) {
-      const match = phraseRegex.exec(norm);
-      if (!match) return false;
-      const after = norm.slice(match.index + match[0].length).trim();
-      const nextWord = after.match(/^([a-z0-9]+)/);
-      if (nextWord && !isTorrentMetadata(nextWord[1])) return false;
-    } else {
-      const matchCount = nameWords.filter(w =>
-        new RegExp(`\\b${escapeRegex(w)}\\b`).test(norm)
-      ).length;
-      if (matchCount < Math.max(1, Math.ceil(nameWords.length * 0.5))) return false;
-    }
+    if (!r.matchedById && !matchers.some(matches => matches(norm))) return false;
 
     if (meta.type === 'series' && meta.season != null) {
       const s = meta.season;
@@ -246,7 +258,6 @@ export function filterByContent(records, meta) {
         'i'
       ).test(r.title);
       if (!hasSeasonEp && !hasLooseEp && !hasSeasonPack) {
-        // ID matches only fail on a marker for another season or episode.
         if (!r.matchedById || hasAnySeasonMarker(r.title, e != null)) return false;
       }
     }
@@ -255,9 +266,28 @@ export function filterByContent(records, meta) {
   });
 }
 
-/**
- * Same markers as the series check above, for any season or episode number.
- */
+function buildNameMatcher(name, year = null) {
+  const words = normalizeTitle(String(name ?? '')).split(/\s+/).filter(w => w.length > 1);
+  if (!words.length) return null;
+
+  if (words.length <= 2) {
+    const yearRegex = Number.isInteger(Number(year)) ? new RegExp(`\\b${Number(year)}\\b`) : null;
+    const phraseRegex = new RegExp(`\\b${words.map(escapeRegex).join('\\s+')}\\b`);
+    return norm => {
+      const match = phraseRegex.exec(norm);
+      if (!match) return false;
+      const after = norm.slice(match.index + match[0].length).trim();
+      const nextWord = after.match(/^([a-z0-9]+)/);
+      if (!nextWord || isTorrentMetadata(nextWord[1])) return true;
+      return yearRegex != null && yearRegex.test(norm);
+    };
+  }
+
+  const wordRegexes = words.map(w => new RegExp(`\\b${escapeRegex(w)}\\b`));
+  const needed = Math.max(1, Math.ceil(words.length * 0.5));
+  return norm => wordRegexes.filter(re => re.test(norm)).length >= needed;
+}
+
 function hasAnySeasonMarker(title, withEpisode) {
   return new RegExp(
     withEpisode
@@ -278,15 +308,29 @@ function escapeRegex(str) {
 
 function normalizeTitle(str) {
   return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-/**
- * List all available provider IDs.
- */
 export function listProviders() {
-  return ACTIVE_PROVIDERS.map(p => ({ id: p.id, name: p.name }));
+  return ACTIVE_PROVIDERS.map(p => ({ id: p.id, name: p.name, types: [...p.types] }));
+}
+
+export function getProvider(id) {
+  return ACTIVE_PROVIDERS.find(p => p.id === id);
+}
+
+export function classifyProviderIds(requestedIds) {
+  const registered = new Set(ALL_PROVIDERS.map(p => p.id));
+  const active     = new Set(ACTIVE_PROVIDERS.map(p => p.id));
+
+  return {
+    active:   requestedIds.filter(id => active.has(id)),
+    disabled: requestedIds.filter(id => registered.has(id) && !active.has(id)),
+    unknown:  requestedIds.filter(id => !registered.has(id)),
+  };
 }

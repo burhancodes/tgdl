@@ -1,16 +1,14 @@
-/**
- * Rutracker provider — scrapes rutracker.org (requires no login for search).
- * Focused on Russian-language and multi-audio releases.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const BASE = 'https://rutracker.org/forum';
 
 export const id   = 'rutracker';
 export const name = 'Rutracker';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -41,21 +39,12 @@ export async function scrape(meta) {
 
       if (!title || !topicId) return;
 
-      // Rutracker magnet links are at a predictable URL
-      const infoHash = $row.find('a[data-topic_id]').attr('data-topic_id') ?? null;
-      // Rutracker provides magnet links via separate call; we build the hash from topic id
-      // as a placeholder — real impl would follow topic page to get the actual hash
-      const magnet = `https://rutracker.org/forum/viewtopic.php?t=${topicId}`;
-
       const seeders  = parseInt($row.find('b.seedmed, b.seedmed').text().trim(), 10) || 0;
       const sizeText = $row.find('td.tor-size').text().trim();
       const size     = parseSize(sizeText);
 
-      // We store the topic ID as a proxy infoHash; real infoHash resolved lazily
-      if (!topicId) return;
-
       results.push({
-        infoHash:  null, // resolved from topic page
+        infoHash:  null,
         topicId,
         title,
         seeders,
@@ -68,7 +57,6 @@ export async function scrape(meta) {
       });
     });
 
-    // Resolve infoHashes for top results (by seeders)
     const top = results.sort((a, b) => b.seeders - a.seeders).slice(0, 10);
     const resolved = await Promise.allSettled(top.map(r => resolveInfoHash(r)));
 
@@ -89,7 +77,6 @@ async function resolveInfoHash(record) {
     );
     const $ = cheerio.load(data);
 
-    // Magnet link on topic page
     const magnet   = $('a[href^="magnet:"]').first().attr('href') ?? '';
     const infoHash = extractInfoHash(magnet);
     if (!infoHash) return null;
@@ -98,11 +85,6 @@ async function resolveInfoHash(record) {
   } catch {
     return null;
   }
-}
-
-function extractInfoHash(magnet = '') {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function parseSize(str) {

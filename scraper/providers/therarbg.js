@@ -1,7 +1,3 @@
-/**
- * TheRarBG provider -- scrapes search results and detail pages via HTML.
- * Successor to the original RARBG. Supports movies and TV.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
@@ -12,6 +8,7 @@ const BASE = 'https://therarbg.com';
 
 export const id   = 'therarbg';
 export const name = 'TheRarBG';
+export const types = ['movie', 'series'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -65,7 +62,6 @@ async function fetchDetail(url, meta) {
     const title = $('h1').first().text().trim()
       || $('title').text().trim().replace(/ - TheRarBG.*/, '');
 
-    // Try to find seeders/leechers/size from the detail page info
     let seeders = 0;
     let leechers = 0;
     let size = 0;
@@ -80,7 +76,6 @@ async function fetchDetail(url, meta) {
       }
     });
 
-    // Try table cells in the row that likely contains stats
     const cells = $('table tbody tr td');
     if (cells.length >= 8) {
       seeders  = seeders || parseInt($(cells[6]).text().trim().replace(/,/g, ''), 10) || 0;

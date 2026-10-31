@@ -85,11 +85,14 @@ type Config struct {
 
 	MemoryLimitMB int64
 
-	TorrentTimeout      time.Duration
-	SearchLimit         int
-	MagnetioURL         string
-	MagnetioSecret      string
-	AriaMaxConcurrentDL int
+	TorrentTimeout           time.Duration
+	SearchLimit              int
+	MagnetioURL              string
+	MagnetioSecret           string
+	AriaMaxConcurrentDL      int
+	ScraperProxyURL          string
+	ScraperProxyProviders    string
+	ScraperDisabledProviders string
 
 	OwnerID          int64
 	HasOwner         bool
@@ -183,11 +186,14 @@ func Load() (*Config, error) {
 		BotAPIDataDir: envStr("TG_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api"),
 		MemoryLimitMB: envInt64("TGDL_MEMORY_LIMIT_MB", 0),
 
-		TorrentTimeout:      envSeconds("TORRENT_TIMEOUT", 120),
-		SearchLimit:         envInt("SEARCH_LIMIT", 300),
-		MagnetioURL:         envStr("MAGNETIO_RPC_URL", "http://magnetio-scraper:8080/rpc"),
-		MagnetioSecret:      envStr("MAGNETIO_RPC_SECRET", ""),
-		AriaMaxConcurrentDL: envInt("ARIA_MAX_CONCURRENT_DOWNLOADS", 1),
+		TorrentTimeout:           envSeconds("TORRENT_TIMEOUT", 120),
+		SearchLimit:              envInt("SEARCH_LIMIT", 300),
+		MagnetioURL:              envStr("MAGNETIO_RPC_URL", "http://magnetio-scraper:8080/rpc"),
+		MagnetioSecret:           envStr("MAGNETIO_RPC_SECRET", ""),
+		AriaMaxConcurrentDL:      envInt("ARIA_MAX_CONCURRENT_DOWNLOADS", 1),
+		ScraperProxyURL:          envStr("SCRAPER_PROXY_URL", ""),
+		ScraperProxyProviders:    envStr("SCRAPER_PROXY_PROVIDERS", ""),
+		ScraperDisabledProviders: envStr("SCRAPER_DISABLED_PROVIDERS", ""),
 
 		MaxJobsPerChat: envInt("MAX_JOBS_PER_CHAT", 3),
 

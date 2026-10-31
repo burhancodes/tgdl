@@ -1,4 +1,3 @@
-// Package torrent wraps the aria2 RPC daemon and the Magnetio search sidecar.
 package torrent
 
 import (
@@ -40,7 +39,6 @@ var defaultTrackers = []string{
 	"udp://tracker.dler.org:6969/announce",
 }
 
-// Trackers maintains a cached public tracker list.
 type Trackers struct {
 	mu        sync.RWMutex
 	list      []string
@@ -65,7 +63,6 @@ func parseLines(s string) []string {
 	return out
 }
 
-// List returns the cached list, loading the on-disk cache or defaults lazily.
 func (t *Trackers) List() []string {
 	t.mu.RLock()
 	if len(t.list) > 0 {
@@ -86,7 +83,6 @@ func (t *Trackers) List() []string {
 	return append([]string(nil), t.list...)
 }
 
-// Refresh downloads and merges the latest public trackers, updating the cache.
 func (t *Trackers) Refresh(ctx context.Context) {
 	set := map[string]struct{}{}
 	for _, src := range trackerSources {
@@ -125,10 +121,8 @@ func (t *Trackers) Refresh(ctx context.Context) {
 	slog.Info("updated tracker list", "count", len(list))
 }
 
-// CSV returns trackers formatted for aria2's --bt-tracker.
 func (t *Trackers) CSV() string { return strings.Join(t.List(), ",") }
 
-// AddToMagnet appends trackers that are not already present in the magnet URI.
 func (t *Trackers) AddToMagnet(magnet string) string {
 	if !strings.HasPrefix(magnet, "magnet:") {
 		return magnet

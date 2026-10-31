@@ -4,9 +4,6 @@ import http from 'node:http';
 
 import { get } from '../lib/httpClient.js';
 
-// A pinned lookup that forces every hostname to the loopback test server,
-// mirroring what lib/ssrf.js hands to the client (but pointing at 127.0.0.1 so
-// the test needs no real network). Handles the options.all shape Node uses.
 function pinToLoopback() {
   return (hostname, options, callback) => {
     if (typeof options === 'function') { callback = options; options = {}; }
@@ -33,8 +30,6 @@ test('pinned lookup connects to the pinned IP while preserving the Host header',
   const port = await listen(server);
 
   try {
-    // `blocked.invalid` never resolves in real DNS; the request only succeeds
-    // because the pinned lookup routes the socket to 127.0.0.1.
     const res = await get(`http://blocked.invalid:${port}/torznab/api`, {
       limiterKey: `pin-${port}`,
       retries: 0,
@@ -45,7 +40,6 @@ test('pinned lookup connects to the pinned IP while preserving the Host header',
     assert.equal(res.status, 200);
     assert.equal(res.data, 'ok');
     assert.equal(received.length, 1);
-    // Host header carries the original hostname + port, not the connect IP.
     assert.equal(received[0].host, `blocked.invalid:${port}`);
     assert.equal(received[0].url, '/torznab/api?t=search&q=x');
   } finally {
@@ -57,7 +51,6 @@ test('pinned lookup disables redirects (a 3xx does not reach another host)', asy
   let hits = 0;
   const server = http.createServer((req, res) => {
     hits++;
-    // Try to bounce the client to an internal target.
     res.writeHead(302, { Location: 'http://169.254.169.254/latest/meta-data/' });
     res.end();
   });
@@ -71,7 +64,6 @@ test('pinned lookup disables redirects (a 3xx does not reach another host)', asy
         lookup: pinToLoopback(),
       }),
       (err) => {
-        // maxRedirects: 0 -> the 302 is surfaced as an error, never followed.
         assert.equal(err.response?.status, 302);
         return true;
       },

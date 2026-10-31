@@ -1,16 +1,14 @@
-/**
- * BTDig provider -- scrapes btdig.com search results via HTML.
- * DHT search engine, good for finding less common torrents.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const BASE = 'https://btdig.com';
 
 export const id   = 'btdig';
 export const name = 'BTDig';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -66,11 +64,6 @@ export async function scrape(meta) {
 
 function extractHashFromUrl(url) {
   const match = url.match(/([a-fA-F0-9]{40})/i);
-  return match ? match[1].toLowerCase() : null;
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
   return match ? match[1].toLowerCase() : null;
 }
 

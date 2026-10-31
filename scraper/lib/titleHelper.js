@@ -1,15 +1,10 @@
-/**
- * Shared torrent title parsing utilities.
- * Extracts quality, codec, size, language hints from raw torrent names.
- */
-
 const QUALITY_PATTERNS = [
   { re: /\b(8k|7680[xX]4320)\b/i,              quality: '8k'    },
   { re: /\b(2160p|4k|uhd)\b/i,                  quality: '4k'    },
   { re: /\b1080p\b/i,                            quality: '1080p' },
   { re: /\b720p\b/i,                             quality: '720p'  },
   { re: /\b480p\b/i,                             quality: '480p'  },
-  { re: /\b(cam|camrip|ts|telesync|telecine|hdcam)\b/i, quality: 'cam' },
+  { re: /\b(cam|camrip|telesync|telecine|hdcam)\b|(?<!-)\bts\b/i, quality: 'cam' },
 ];
 
 const CODEC_PATTERNS = [
@@ -21,18 +16,22 @@ const CODEC_PATTERNS = [
 const SOURCE_PATTERNS = [
   { re: /\b(bluray|blu-ray|bdrip|brrip)\b/i,  source: 'BluRay'   },
   { re: /\b(webrip|web-rip)\b/i,               source: 'WEBRip'   },
-  { re: /\b(webdl|web-dl|web)\b/i,             source: 'WEB-DL'   },
+  { re: /\b(webdl|web-dl)\b/i,                 source: 'WEB-DL'   },
   { re: /\bhdrip\b/i,                           source: 'HDRip'    },
   { re: /\bdvdrip\b/i,                          source: 'DVDRip'   },
   { re: /\bhdtv\b/i,                            source: 'HDTV'     },
+  { re: /\bweb\b/i,                             source: 'WEB-DL'   },
 ];
+
+const notSubtitled = tag => new RegExp(`(?<!\\bsub[\\s._-]{0,2})\\b(?:${tag})\\b`, 'i');
 
 const LANGUAGE_PATTERNS = [
   { re: /\bmulti\b/i,     lang: 'multi' },
+  { re: notSubtitled('eng|english'),          lang: 'en' },
+  { re: notSubtitled('ita|italian[oa]?'),     lang: 'it' },
   { re: /\bfrench\b/i,    lang: 'fr'    },
   { re: /\bspanish\b/i,   lang: 'es'    },
   { re: /\bportuguese\b/i,lang: 'pt'    },
-  { re: /\bitalian\b/i,   lang: 'it'    },
   { re: /\bgerman\b/i,    lang: 'de'    },
   { re: /\brussian\b/i,   lang: 'ru'    },
   { re: /\bkorean\b/i,    lang: 'ko'    },
@@ -72,7 +71,6 @@ export function parseTitle(title) {
   for (const { re, lang } of LANGUAGE_PATTERNS) {
     if (re.test(title)) languages.push(lang);
   }
-  // Default to English if no language detected
   if (!languages.length && !/\b(dubbed|multi)\b/i.test(title)) {
     languages.push('en');
   }
@@ -83,12 +81,10 @@ export function parseTitle(title) {
   return { quality, codec, source, languages, hdr, bitdepth };
 }
 
-/**
- * Build a search query string for a given piece of content.
- * For series: "Show Name S01E02"
- * For movies: "Movie Name 2024"
- */
 export function buildSearchQuery(meta) {
+  if (meta.type === 'anime') {
+    return meta.episode != null ? `${meta.name} ${meta.episode}` : meta.name;
+  }
   if (meta.type === 'series' && meta.season != null && meta.episode != null) {
     const s = String(meta.season).padStart(2, '0');
     const e = String(meta.episode).padStart(2, '0');

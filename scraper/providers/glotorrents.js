@@ -1,16 +1,15 @@
-/**
- * GloTorrents provider -- scrapes glodls.to search results via HTML.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.glotorrents;
 
 export const id   = 'glotorrents';
 export const name = 'GloTorrents';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -74,11 +73,6 @@ export async function scrape(meta) {
     logger.warn(`[GloTorrents] ${err.message}`);
     return [];
   }
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function parseSize(str) {

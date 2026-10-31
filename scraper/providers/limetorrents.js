@@ -1,16 +1,15 @@
-/**
- * LimeTorrents provider -- scrapes search results and detail pages via HTML.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.limetorrents;
 
 export const id   = 'limetorrents';
 export const name = 'LimeTorrents';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -84,11 +83,6 @@ async function fetchDetail(row, meta) {
 
 function extractHashFromTorrentUrl(url = '') {
   const match = url.match(/\/torrent\/([a-fA-F0-9]{40})\.torrent/i);
-  return match ? match[1].toLowerCase() : null;
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
   return match ? match[1].toLowerCase() : null;
 }
 

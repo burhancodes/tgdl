@@ -69,7 +69,8 @@ async function handleSingleRpc(req, reqObj) {
           return makeError(id, -32602, 'Invalid params: query string is required');
         }
 
-        const type = paramsObj.type || 'movie';
+        const rawType = paramsObj.type || (Array.isArray(params) && params[1] ? params[1] : null);
+        const type = (rawType && rawType !== 'all') ? String(rawType).toLowerCase() : 'all';
         const year = paramsObj.year ? parseInt(paramsObj.year, 10) : undefined;
         const season = paramsObj.season ? parseInt(paramsObj.season, 10) : undefined;
         const episode = paramsObj.episode ? parseInt(paramsObj.episode, 10) : undefined;
@@ -77,7 +78,7 @@ async function handleSingleRpc(req, reqObj) {
         const limit = paramsObj.limit ? parseInt(paramsObj.limit, 10) : null;
         const strict = paramsObj.strict !== undefined ? Boolean(paramsObj.strict) : false;
 
-        const meta = { name: query, year, season, episode, type };
+        const meta = { name: query, year, season, episode, ...(type !== 'all' ? { type } : {}) };
         const records = await scrapeAll(type, meta, providers, { strict }, strict);
 
         let mapped = records.map(r => {
@@ -109,7 +110,7 @@ async function handleSingleRpc(req, reqObj) {
       }
 
       case 'torrent.health': {
-        return makeResult(id, { status: 'ok', service: 'magnetio-scraper', version: '1.1.5' });
+        return makeResult(id, { status: 'ok', service: 'magnetio-scraper', version: '1.2.0' });
       }
 
       default:

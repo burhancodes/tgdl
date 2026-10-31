@@ -7,7 +7,6 @@ import {
   resolveSafeTarget,
 } from '../lib/ssrf.js';
 
-// Promisified pinnedLookup helpers for assertions.
 function callLookup(lookup, options = {}) {
   return new Promise((resolve, reject) => {
     lookup('any-host.example', options, (err, address, family) => {
@@ -16,8 +15,6 @@ function callLookup(lookup, options = {}) {
     });
   });
 }
-
-// ─── isPrivateOrReservedIp ─────────────────────────────────────────────────────
 
 test('isPrivateOrReservedIp flags private / reserved IPv4', () => {
   for (const ip of [
@@ -60,20 +57,16 @@ test('isPrivateOrReservedIp treats non-IP input as unsafe', () => {
   }
 });
 
-// ─── pinnedLookup ──────────────────────────────────────────────────────────────
-
 test('pinnedLookup returns the pinned address for all callback shapes', async () => {
   const lookup = pinnedLookup('8.8.8.8', 4);
 
   assert.deepEqual(await callLookup(lookup, {}), { address: '8.8.8.8', family: 4 });
   assert.deepEqual(await callLookup(lookup, { family: 4 }), { address: '8.8.8.8', family: 4 });
 
-  // options.all -> array form (used by autoSelectFamily)
   const all = await new Promise((resolve, reject) =>
     lookup('h', { all: true }, (err, addrs) => (err ? reject(err) : resolve(addrs))));
   assert.deepEqual(all, [{ address: '8.8.8.8', family: 4 }]);
 
-  // options omitted -> (hostname, callback)
   const short = await new Promise((resolve, reject) =>
     lookup('h', (err, address, family) => (err ? reject(err) : resolve({ address, family }))));
   assert.deepEqual(short, { address: '8.8.8.8', family: 4 });
@@ -91,8 +84,6 @@ test('pinnedLookup refuses to hand out a private address (defense in depth)', as
     return true;
   });
 });
-
-// ─── resolveSafeTarget ─────────────────────────────────────────────────────────
 
 test('resolveSafeTarget rejects non-http(s) protocols', async () => {
   for (const url of ['ftp://example.com/', 'file:///etc/passwd', 'gopher://x/']) {
@@ -125,25 +116,19 @@ test('resolveSafeTarget rejects private IP literals (no network)', async () => {
 });
 
 test('resolveSafeTarget rejects encoded-integer IP hosts (decimal/hex/octal/short)', async () => {
-  // WHATWG new URL() canonicalises these numeric forms to dotted-decimal
-  // (127.0.0.1 / 192.168.0.1), which the range check then rejects. All are
-  // numeric hosts, so dns.lookup short-circuits and no network is touched.
   for (const url of [
-    'http://2130706433/',   // decimal 127.0.0.1
-    'http://0x7f000001/',   // hex 127.0.0.1
-    'http://0177.0.0.1/',   // octal first octet -> 127.0.0.1
-    'http://127.1/',        // short form -> 127.0.0.1
-    'http://3232235521/',   // decimal 192.168.0.1
-    'http://0xC0A80001/',   // hex 192.168.0.1
+    'http://2130706433/',
+    'http://0x7f000001/',
+    'http://0177.0.0.1/',
+    'http://127.1/',
+    'http://3232235521/',
+    'http://0xC0A80001/',
   ]) {
     assert.equal(await resolveSafeTarget(url), null, url);
   }
 });
 
 test('resolveSafeTarget fails closed when DNS resolution is too slow', async () => {
-  // Resolver that only answers after the timeout window. It still settles (so
-  // no promise leaks in the test runner), but resolveSafeTarget must give up
-  // first and return null.
   const slow = () =>
     new Promise((resolve) => setTimeout(() => resolve([{ address: '8.8.8.8', family: 4 }]), 60));
   assert.equal(
@@ -161,15 +146,12 @@ test('resolveSafeTarget accepts a public IP literal and pins it', async () => {
 });
 
 test('resolveSafeTarget pins the validated IP even if DNS later rebinds', async () => {
-  // Simulate the check returning a public address...
   const target = await resolveSafeTarget('http://scanner.example/api', {
     dnsLookup: async () => [{ address: '93.184.216.34', family: 4 }],
   });
   assert.ok(target);
   assert.equal(target.address, '93.184.216.34');
 
-  // ...and confirm the pinned lookup keeps returning that same address (it does
-  // NOT re-resolve), so a rebind to a private IP at connect time cannot happen.
   const resolved = await callLookup(target.lookup, { all: false });
   assert.deepEqual(resolved, { address: '93.184.216.34', family: 4 });
 });

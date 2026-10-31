@@ -1,21 +1,17 @@
-/**
- * EZTV provider -- uses the official EZTV JSON API.
- * Supports series only (no movies).
- */
 import { get } from '../lib/httpClient.js';
 import { parseTitle } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { normaliseInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.eztv;
 
-// The API caps limit at 100 per page and lists newest uploads first. Long
-// shows run to thousands of torrents, so cap the pages fetched per lookup.
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
 
 export const id   = 'eztv';
 export const name = 'EZTV';
+export const types = ['series'];
 
 export async function scrape(meta) {
   if (meta.type !== 'series') return [];
@@ -27,8 +23,6 @@ export async function scrape(meta) {
     const first   = await fetchPage(imdbNumeric, 1);
     const results = (first?.torrents ?? []).map(normalise);
 
-    // torrents_count gives the page count up front, so the remaining pages
-    // are fetched concurrently (the 'eztv' limiter still caps parallelism).
     const total = Math.min(Math.ceil((first?.torrents_count ?? 0) / PAGE_SIZE), MAX_PAGES);
     const rest  = [];
     for (let page = 2; page <= total; page++) rest.push(fetchPage(imdbNumeric, page));
@@ -58,7 +52,7 @@ async function fetchPage(imdbNumeric, page) {
 function normalise(t) {
   const parsed = parseTitle(t.title);
   return {
-    infoHash:  t.hash?.toLowerCase(),
+    infoHash:  normaliseInfoHash(t.hash),
     title:     t.title,
     seeders:   t.seeds ?? 0,
     leechers:  t.peers ?? 0,

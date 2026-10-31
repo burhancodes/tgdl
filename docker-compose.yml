@@ -2,8 +2,8 @@ services:
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
     restart: unless-stopped
-    mem_limit: ${BOTAPI_MEM:-3g}
-    memswap_limit: ${BOTAPI_MEM:-3g}
+    mem_limit: ${BOTAPI_MEM:-1g}
+    memswap_limit: ${BOTAPI_MEM:-1g}
     cpus: ${BOTAPI_CPUS:-2}
     pids_limit: 512
     logging:
@@ -36,6 +36,10 @@ services:
       - RPC_SHARED_SECRET=${MAGNETIO_RPC_SECRET:-}
       - SCRAPER_PROVIDER_TIMEOUT_MS=${SCRAPER_PROVIDER_TIMEOUT_MS:-20000}
       - SCRAPER_HARD_TIMEOUT_MS=${SCRAPER_HARD_TIMEOUT_MS:-30000}
+      - SCRAPER_PROXY_URL=${SCRAPER_PROXY_URL:-}
+      - SCRAPER_PROXY_PROVIDERS=${SCRAPER_PROXY_PROVIDERS:-}
+      - SCRAPER_DISABLED_PROVIDERS=${SCRAPER_DISABLED_PROVIDERS:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
       - NODE_OPTIONS=--max-old-space-size=384
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]

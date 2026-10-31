@@ -628,6 +628,30 @@ var defaultSpecs = []*Spec{
 		Secret:      true,
 		Apply:       ApplyRestart,
 	},
+	{
+		Key:         "SCRAPER_PROXY_URL",
+		Group:       GroupTorrents,
+		Description: "Outbound HTTP or SOCKS proxy URL for torrent scraper sidecar requests",
+		Type:        "string",
+		Default:     "",
+		Apply:       ApplyRestart,
+	},
+	{
+		Key:         "SCRAPER_PROXY_PROVIDERS",
+		Group:       GroupTorrents,
+		Description: "Comma-separated list of scraper provider IDs that must use the proxy (empty for all)",
+		Type:        "string",
+		Default:     "",
+		Apply:       ApplyRestart,
+	},
+	{
+		Key:         "SCRAPER_DISABLED_PROVIDERS",
+		Group:       GroupTorrents,
+		Description: "Comma-separated list of scraper provider IDs to disable",
+		Type:        "string",
+		Default:     "",
+		Apply:       ApplyRestart,
+	},
 
 	{
 		Key:         "LOG_DIR",

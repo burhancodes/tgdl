@@ -1,31 +1,22 @@
-/**
- * TorrentGalaxy provider -- scrapes search and detail pages via HTML.
- *
- * Search lives at /get-posts/keywords:<query>:category:<Movies|TV>/. The old
- * /torrents.php endpoint now 302s to the homepage (latest uploads), so the
- * search page is validated before parsing. Result rows carry no magnet link,
- * so the magnet is read from each post's detail page.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.torrentgalaxy;
 
-// Detail pages fetched per search; rows are ranked by seeders first.
 const MAX_DETAILS = 20;
 
 export const id   = 'torrentgalaxy';
 export const name = 'TorrentGalaxy';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
 
   try {
-    // ':' separates path filters and '/' ends the segment, so strip them
-    // (and collapse whitespace, which the site also mis-parses).
     const query = buildSearchQuery(meta).replace(/[:/\\?#]/g, ' ').replace(/\s+/g, ' ').trim();
     const cat   = meta.type === 'movie' ? 'Movies' : 'TV';
 
@@ -34,7 +25,6 @@ export async function scrape(meta) {
       const res = await get(url, { limiterKey: 'torrentgalaxy' });
       return { data: res.data, base };
     }, 'TorrentGalaxy', {
-      // A redirect to the homepage or any non-search page means the query was dropped.
       validate: ({ data }) => typeof data === 'string' && /<title>\s*Search for\b/i.test(data),
     });
 
@@ -50,7 +40,6 @@ export async function scrape(meta) {
       if (!title || !href) return;
       if (!matchesEpisode(title, meta)) return;
 
-      // Health renders as [<font><b>seeders</b></font>/<font><b>leechers</b></font>]
       const health   = $row.find('span[title="Seeders/Leechers"] b');
       const seeders  = parseInt(health.eq(0).text().replace(/,/g, ''), 10) || 0;
       const leechers = parseInt(health.eq(1).text().replace(/,/g, ''), 10) || 0;
@@ -103,11 +92,6 @@ async function fetchInfoHash(url) {
   }
 }
 
-/**
- * The site's search is fuzzy (a S01E01 query also returns S01E02..E10), so
- * skip other episodes before spending a detail fetch on them. Season packs
- * are kept, matching the downstream content filter.
- */
 function matchesEpisode(title, meta) {
   if (meta.type !== 'series' || meta.season == null || meta.episode == null) return true;
   const s = meta.season;
@@ -116,11 +100,6 @@ function matchesEpisode(title, meta) {
   if (new RegExp(`\\b${s}x0*${e}\\b`, 'i').test(title)) return true;
   if (new RegExp(`\\bs0*${s}\\s*e\\d`, 'i').test(title)) return false;
   return new RegExp(`\\bseason\\s*0*${s}\\b|\\bs0*${s}\\b`, 'i').test(title);
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function parseSize(str) {

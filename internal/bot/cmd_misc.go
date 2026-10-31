@@ -225,11 +225,17 @@ func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Upda
 	m := u.Message
 	toks := tokens(m)
 	var providers []string
+	var category string
 	var q []string
 	for i := 0; i < len(toks); i++ {
 		if (toks[i] == "-p" || toks[i] == "--provider") && i+1 < len(toks) {
 			i++
 			providers = append(providers, strings.Split(toks[i], ",")...)
+			continue
+		}
+		if (toks[i] == "-t" || toks[i] == "--type" || toks[i] == "-c" || toks[i] == "--category") && i+1 < len(toks) {
+			i++
+			category = strings.ToLower(strings.TrimSpace(toks[i]))
 			continue
 		}
 		q = append(q, toks[i])
@@ -242,9 +248,9 @@ func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Upda
 		}
 		hint := ""
 		if len(names) > 0 {
-			hint = "\nProviders: " + code(strings.Join(names, ", "))
+			hint = "\nTypes: " + code("movie, series, anime, all") + "\nProviders: " + code(strings.Join(names, ", "))
 		}
-		a.reply(ctx, m, "Usage: <code>/ts [-p provider] &lt;query&gt;</code>"+hint)
+		a.reply(ctx, m, "Usage: <code>/ts [-p provider] [-t type] &lt;query&gt;</code>"+hint)
 		return
 	}
 	if len(providers) == 1 && providers[0] == "all" {
@@ -253,7 +259,7 @@ func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Upda
 	ref, _ := a.tg.Send(ctx, m.Chat.ID, "Searching "+code(query)+"…", tg.SendOpts{ReplyTo: m.ID})
 	sctx, cancel := context.WithTimeout(ctx, a.cfg.TorrentTimeout+5*time.Second)
 	defer cancel()
-	res, err := a.search.Search(sctx, query, providers)
+	res, err := a.search.Search(sctx, query, providers, category)
 	if err != nil {
 		slog.Warn("torrent search failed", "err", err)
 		_ = a.tg.Edit(ctx, ref, "Search failed: "+code(err.Error()), tg.SendOpts{})

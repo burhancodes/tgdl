@@ -1,15 +1,13 @@
 import { logger } from './logger.js';
 
-// Default maximum memory cache size: 20 MB
 const MAX_CACHE_BYTES = parseInt(process.env.CACHE_MAX_BYTES, 10) || (20 * 1024 * 1024);
 
 class BoundedLRUCache {
   constructor(maxBytes = MAX_CACHE_BYTES) {
     this.maxBytes = maxBytes;
     this.currentBytes = 0;
-    this.map = new Map(); // key -> { value, size, expiresAt }
+    this.map = new Map();
 
-    // Periodically sweep expired keys every 5 minutes
     this._sweepInterval = setInterval(() => this.sweepExpired(), 5 * 60 * 1000);
     if (this._sweepInterval.unref) {
       this._sweepInterval.unref();
@@ -34,7 +32,6 @@ class BoundedLRUCache {
       return undefined;
     }
 
-    // Refresh LRU access order: delete and re-insert at end
     this.map.delete(key);
     this.map.set(key, entry);
     return entry.value;
@@ -43,16 +40,13 @@ class BoundedLRUCache {
   set(key, value, ttlMs = 3600 * 1000) {
     const entrySize = this._estimateSize(key, value);
     if (entrySize > this.maxBytes) {
-      // Single entry exceeds maximum total cache size; skip caching
       return;
     }
 
-    // If key exists, delete old entry to adjust currentBytes
     if (this.map.has(key)) {
       this.delete(key);
     }
 
-    // Evict oldest entries until within maxBytes limit
     while (this.currentBytes + entrySize > this.maxBytes && this.map.size > 0) {
       const oldestKey = this.map.keys().next().value;
       if (oldestKey !== undefined) {

@@ -1,5 +1,5 @@
 {
-  "name": "magnetio",
+  "name": "magnetio-scraper",
   "version": "1.2.0",
   "description": "Magnetio in-house torrent scraper back-end",
   "type": "module",
@@ -7,25 +7,30 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "doc:providers": "node scripts/gen-providers-doc.js",
+    "try": "node scripts/try-provider.js"
   },
   "author": "Magnetio Contributors",
   "license": "Apache-2.0",
   "dependencies": {
+    "@keyv/redis": "^6.1.0",
     "axios": "^1.20.0",
     "bottleneck": "^2.19.5",
     "cheerio": "^1.0.0-rc.12",
-    "dotenv": "^18.0.5",
-    "express": "^5.2.1",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
     "feedparser": "^2.6.0",
+    "https-proxy-agent": "^9.1.0",
     "iconv-lite": "^0.7.3",
-    "keyv": "^5.6.0",
+    "keyv": "^6.1.0",
     "node-cron": "^4.6.0",
     "p-limit": "^7.3.3",
+    "socks-proxy-agent": "^10.1.0",
     "winston": "^3.11.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.1.14"
   },
   "engines": {
     "node": ">=18.0.0"

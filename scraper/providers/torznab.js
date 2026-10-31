@@ -1,7 +1,3 @@
-/**
- * Torznab provider -- queries any Torznab-compatible endpoint (Jackett, Prowlarr, etc.).
- * Conditionally active: returns [] when no torznabUrl is configured.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { resolveSafeTarget } from '../lib/ssrf.js';
@@ -10,6 +6,7 @@ import { logger } from '../lib/logger.js';
 
 export const id   = 'torznab';
 export const name = 'Torznab';
+export const types = ['movie', 'series', 'anime'];
 
 const CATEGORY_MOVIES = '2000';
 const CATEGORY_TV     = '5000';
@@ -19,8 +16,6 @@ export async function scrape(meta) {
   const apiKey  = meta.torznabApiKey;
   if (!baseUrl) return [];
 
-  // Resolve + validate the user-supplied URL and pin the verified IP so the
-  // request connects to exactly that address (closes the DNS-rebinding window).
   const target = await resolveSafeTarget(baseUrl);
   if (!target) {
     logger.warn('[Torznab] Rejected unsafe or invalid URL');
@@ -39,8 +34,6 @@ export async function scrape(meta) {
 
     const $ = cheerio.load(data, { xmlMode: true });
     const results = [];
-    // An imdbid query is matched by the indexer, so results are tied to the
-    // title even when their names are localized (see filterByContent).
     const matchedById = Boolean(params.imdbid);
 
     $('item').each((_, el) => {

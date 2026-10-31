@@ -17,7 +17,7 @@ var helpPages = map[string]string{
 	"tor": "<b>Torrents &amp; aria2</b>\n" +
 		"• <code>/tor &lt;magnet | .torrent URL&gt;</code> or reply to a .torrent file\n" +
 		"• <code>/aria &lt;url&gt; [-c N] [-s N] [--header 'K: V'] [--out NAME] [--opt k=v]</code>\n" +
-		"• <code>/ts [-p provider] &lt;query&gt;</code> — search torrent indexers",
+		"• <code>/ts [-p provider] [-t type] &lt;query&gt;</code> — search torrent indexers",
 	"unzip": "<b>Archives</b>\n" +
 		"• <code>/unzip [-p pass]</code> — reply to an archive (or pass a URL); split volumes are detected automatically\n" +
 		"Encrypted archives prompt for a password (reply to the prompt).\n" +

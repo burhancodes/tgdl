@@ -1,16 +1,14 @@
-/**
- * YTS provider -- uses the official YTS JSON API.
- * Supports movies only (no series).
- */
 import { get } from '../lib/httpClient.js';
 import { parseTitle } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { normaliseInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.yts;
 
 export const id   = 'yts';
 export const name = 'YTS';
+export const types = ['movie'];
 
 export async function scrape(meta) {
   if (meta.type !== 'movie') return [];
@@ -46,7 +44,7 @@ export function isValidYtsResponse(response) {
 function normalise(movie, t) {
   const titleStr = `${movie.title} ${t.quality} ${t.type}`;
   return {
-    infoHash:  t.hash?.toLowerCase(),
+    infoHash:  normaliseInfoHash(t.hash),
     title:     `${movie.title_long} [${t.quality}] [${t.type}]`,
     seeders:   t.seeds ?? 0,
     leechers:  t.peers ?? 0,

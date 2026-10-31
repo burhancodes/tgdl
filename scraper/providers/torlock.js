@@ -1,25 +1,17 @@
-/**
- * TorLock provider -- scrapes torlock2.com search results via HTML.
- * Verified torrents only (TorLock's USP).
- *
- * The search page no longer carries magnet links, so the info hash is read
- * from each result's detail page. The first rows of every search page are
- * sponsored links to external hosts; only rows with an `a.tl-name` link to a
- * local /torrent/<id>/ page are real results.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { tryDomains, PROVIDER_DOMAINS } from '../lib/domainRotation.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const DOMAINS = PROVIDER_DOMAINS.torlock;
 
-// Detail pages fetched per search (one request each), highest seeded first.
 const MAX_DETAILS = 20;
 
 export const id   = 'torlock';
 export const name = 'TorLock';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -95,11 +87,6 @@ async function fetchInfoHash(url) {
   } catch {
     return null;
   }
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function parseSize(str) {

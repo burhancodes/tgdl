@@ -25,7 +25,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/config"
 )
 
-// RPCError is a JSON-RPC or transport failure talking to the search sidecar.
 type RPCError struct {
 	Msg  string
 	Code int
@@ -33,7 +32,6 @@ type RPCError struct {
 
 func (e *RPCError) Error() string { return e.Msg }
 
-// Result is a normalized torrent search hit.
 type Result struct {
 	Name      string
 	Size      string
@@ -48,17 +46,16 @@ type Result struct {
 	Languages []string
 }
 
-// Magnetio is a client (and optional local supervisor) for the Node.js
-// torrent search sidecar in ./scraper.
 type Magnetio struct {
 	cfg  *config.Config
 	http *http.Client
 
-	mu        sync.Mutex
-	rpcURL    string
-	secret    string
-	cmd       *exec.Cmd
-	providers map[string]string
+	mu            sync.Mutex
+	rpcURL        string
+	secret        string
+	cmd           *exec.Cmd
+	providers     map[string]string
+	providerTypes map[string][]string
 }
 
 func NewMagnetio(cfg *config.Config) *Magnetio {
@@ -112,7 +109,6 @@ func isLocalEndpoint(rawURL string) bool {
 	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == ""
 }
 
-// Start connects to an existing sidecar or launches ./scraper/index.js.
 func (m *Magnetio) Start(ctx context.Context) {
 	if m.cfg.MagnetioURL != "" {
 		maxAttempts := 30
@@ -167,7 +163,17 @@ func (m *Magnetio) Start(ctx context.Context) {
 	logf, _ := os.OpenFile(filepath.Join(m.cfg.LogDir, "magnetio_scraper.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	cmd := exec.Command("node", "index.js")
 	cmd.Dir = "scraper"
-	cmd.Env = append(os.Environ(), "PORT="+strconv.Itoa(port), "RPC_SHARED_SECRET="+secret)
+	env := append(os.Environ(), "PORT="+strconv.Itoa(port), "RPC_SHARED_SECRET="+secret)
+	if m.cfg.ScraperProxyURL != "" {
+		env = append(env, "SCRAPER_PROXY_URL="+m.cfg.ScraperProxyURL)
+	}
+	if m.cfg.ScraperProxyProviders != "" {
+		env = append(env, "SCRAPER_PROXY_PROVIDERS="+m.cfg.ScraperProxyProviders)
+	}
+	if m.cfg.ScraperDisabledProviders != "" {
+		env = append(env, "SCRAPER_DISABLED_PROVIDERS="+m.cfg.ScraperDisabledProviders)
+	}
+	cmd.Env = env
 	if logf != nil {
 		cmd.Stdout, cmd.Stderr = logf, logf
 	}
@@ -197,7 +203,6 @@ func (m *Magnetio) Start(ctx context.Context) {
 	_ = cmd.Process.Kill()
 }
 
-// Stop terminates a locally supervised sidecar.
 func (m *Magnetio) Stop() {
 	m.mu.Lock()
 	cmd := m.cmd
@@ -254,19 +259,28 @@ func (m *Magnetio) loadProviders(ctx context.Context) {
 		slog.Warn("fetch torrent providers failed", "err", err)
 		return
 	}
-	var wrapped struct {
-		Providers []struct{ ID, Name string } `json:"providers"`
+	type provEntry struct {
+		ID    string   `json:"id"`
+		Name  string   `json:"name"`
+		Types []string `json:"types"`
 	}
-	var list []struct{ ID, Name string }
+	var wrapped struct {
+		Providers []provEntry `json:"providers"`
+	}
+	var list []provEntry
 	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Providers != nil {
 		list = wrapped.Providers
 	} else {
 		_ = json.Unmarshal(raw, &list)
 	}
 	p := map[string]string{}
+	pt := map[string][]string{}
 	for _, it := range list {
 		if it.ID != "" && it.Name != "" {
 			p[it.ID] = it.Name
+			if len(it.Types) > 0 {
+				pt[it.ID] = it.Types
+			}
 		}
 	}
 	if len(p) > 0 {
@@ -274,11 +288,11 @@ func (m *Magnetio) loadProviders(ctx context.Context) {
 	}
 	m.mu.Lock()
 	m.providers = p
+	m.providerTypes = pt
 	m.mu.Unlock()
 	slog.Info("loaded torrent providers", "count", len(p))
 }
 
-// Providers returns id->name for available search providers.
 func (m *Magnetio) Providers() map[string]string {
 	m.mu.Lock()
 	if len(m.providers) == 0 {
@@ -296,7 +310,16 @@ func (m *Magnetio) Providers() map[string]string {
 	return out
 }
 
-// FormatBytes renders a byte count as a human string.
+func (m *Magnetio) ProviderTypes() map[string][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string][]string, len(m.providerTypes))
+	for k, v := range m.providerTypes {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
 func FormatBytes(n float64) string {
 	units := []string{"B", "KB", "MB", "GB", "TB"}
 	for _, u := range units {
@@ -308,9 +331,12 @@ func FormatBytes(n float64) string {
 	return fmt.Sprintf("%.2f PB", n)
 }
 
-// Search queries the sidecar. providers may be nil for all.
-func (m *Magnetio) Search(ctx context.Context, query string, providers []string) ([]Result, error) {
-	params := map[string]any{"query": query, "limit": max(m.cfg.SearchLimit, 1), "strict": true, "type": "movie"}
+func (m *Magnetio) Search(ctx context.Context, query string, providers []string, category ...string) ([]Result, error) {
+	searchType := "all"
+	if len(category) > 0 && category[0] != "" {
+		searchType = strings.ToLower(strings.TrimSpace(category[0]))
+	}
+	params := map[string]any{"query": query, "limit": max(m.cfg.SearchLimit, 1), "strict": true, "type": searchType}
 	if len(providers) > 0 {
 		params["providers"] = providers
 	}
@@ -363,7 +389,6 @@ func (m *Magnetio) Search(ctx context.Context, query string, providers []string)
 	return out, nil
 }
 
-// FormatHTML renders the first 15 results as Telegram HTML.
 func FormatHTML(results []Result, query, site string) string {
 	if len(results) == 0 {
 		return "<b>No torrent results found</b> for <i>" + html.EscapeString(query) + "</i>."
@@ -387,12 +412,10 @@ func FormatHTML(results []Result, query, site string) string {
 
 var _ = errors.New
 
-// Call performs a raw JSON-RPC request; used by the XenForo scraper engine.
 func (m *Magnetio) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	return m.rpc(ctx, method, params)
 }
 
-// EnsureStarted lazily connects to (or launches) the sidecar.
 func (m *Magnetio) EnsureStarted(ctx context.Context) {
 	u, s := m.endpoint()
 	if m.probe(ctx, u, s) {

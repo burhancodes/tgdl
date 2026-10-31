@@ -40,7 +40,6 @@ func TestMagnetio_Start_ConnectsRemoteWithRetry(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
-			// Fail the first 2 attempts, succeed on the 3rd
 			if attempts.Add(1) < 3 {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -56,7 +55,7 @@ func TestMagnetio_Start_ConnectsRemoteWithRetry(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			if req.Method == "torrent.providers" {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"providers":[{"id":"1337x","name":"1337x"}]},"id":1}`))
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"providers":[{"id":"1337x","name":"1337x","types":["movie","series","anime"]}]},"id":1}`))
 				return
 			}
 		}
@@ -88,10 +87,14 @@ func TestMagnetio_Start_ConnectsRemoteWithRetry(t *testing.T) {
 	if providers["1337x"] != "1337x" {
 		t.Errorf("expected provider 1337x, got %v", providers)
 	}
+
+	provTypes := m.ProviderTypes()
+	if len(provTypes["1337x"]) != 3 {
+		t.Errorf("expected 3 types for 1337x, got %v", provTypes["1337x"])
+	}
 }
 
 func TestMagnetio_Start_RemoteFailureDoesNotSpawnLocal(t *testing.T) {
-	// Point to a non-existent remote endpoint
 	cfg := &config.Config{
 		MagnetioURL:    "http://magnetio-scraper.invalid:8080/rpc",
 		MagnetioSecret: "secret",
@@ -102,16 +105,59 @@ func TestMagnetio_Start_RemoteFailureDoesNotSpawnLocal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
-	// Should attempt probes, hit ctx timeout or retries, and return without spawning local node
 	m.Start(ctx)
 
-	// Local cmd should remain nil
 	if m.cmd != nil {
 		t.Fatalf("expected m.cmd to be nil for remote endpoint, got %v", m.cmd)
 	}
-	// Endpoint should still be the configured remote URL, NOT localhost
 	endpoint, _ := m.endpoint()
 	if endpoint != "http://magnetio-scraper.invalid:8080/rpc" {
 		t.Fatalf("endpoint should remain configured remote URL, got %s", endpoint)
+	}
+}
+
+func TestMagnetio_Search_Category(t *testing.T) {
+	var requestedType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rpc" {
+			var req struct {
+				Method string `json:"method"`
+				Params struct {
+					Type string `json:"type"`
+				} `json:"params"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Method == "torrent.search" {
+				requestedType = req.Params.Type
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"torrents":[]},"id":1}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		MagnetioURL:    srv.URL + "/rpc",
+		TorrentTimeout: 5 * time.Second,
+	}
+	m := NewMagnetio(cfg)
+	ctx := context.Background()
+
+	_, err := m.Search(ctx, "test query", nil, "anime")
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if requestedType != "anime" {
+		t.Errorf("expected type anime, got %s", requestedType)
+	}
+
+	_, err = m.Search(ctx, "test default", nil)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if requestedType != "all" {
+		t.Errorf("expected default type all, got %s", requestedType)
 	}
 }

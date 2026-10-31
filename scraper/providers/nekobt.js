@@ -1,8 +1,4 @@
-/**
- * nekoBT provider -- uses the public Torznab-compatible RSS API.
- * Anime-focused tracker with fansub content. No auth required.
- */
-import { parseFeed } from '../lib/feedHelper.js';
+import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
 import { extractInfoHash } from '../lib/magnetHelper.js';
@@ -12,6 +8,7 @@ const BASE = 'https://nekobt.to';
 
 export const id   = 'nekobt';
 export const name = 'nekoBT';
+export const types = ['series', 'anime'];
 
 export async function scrape(meta) {
   if (meta.type !== 'series' && meta.type !== 'anime') return [];
@@ -25,27 +22,29 @@ export async function scrape(meta) {
       params: {
         t:   'search',
         q:   query,
-        cat: '5070',  // anime category
+        cat: '5070',
       },
     });
 
-    const items = await parseFeed(data);
+    const $ = cheerio.load(data, { xmlMode: true });
     const results = [];
 
-    for (const item of items) {
-      const title = item.title ? item.title.trim() : '';
-      if (!title) continue;
+    $('item').each((_, item) => {
+      const $item = $(item);
+      const title = $item.find('title').text().trim();
+      if (!title) return;
 
-      let infoHash = getAttr(item, 'infohash');
+      let infoHash = getAttr($, $item, 'infohash');
       if (!infoHash) {
-        const magnetUrl = getAttr(item, 'magneturl') || (item.link ? item.link.trim() : '');
+        const magnetUrl = getAttr($, $item, 'magneturl')
+          || $item.find('link').text().trim();
         if (magnetUrl) infoHash = extractInfoHash(magnetUrl);
       }
-      if (!infoHash) continue;
+      if (!infoHash) return;
 
-      const seeders = parseInt(getAttr(item, 'seeders') || '0', 10);
-      const leechers = parseInt(getAttr(item, 'peers') || '0', 10) - seeders;
-      const size = parseInt(getAttr(item, 'size') || (item.size ? item.size : '0'), 10);
+      const seeders  = parseInt(getAttr($, $item, 'seeders') || '0', 10);
+      const leechers = parseInt(getAttr($, $item, 'peers') || '0', 10) - seeders;
+      const size     = parseInt($item.find('size').text().trim() || getAttr($, $item, 'size') || '0', 10);
 
       results.push({
         ...parseTitle(title),
@@ -58,7 +57,7 @@ export async function scrape(meta) {
         imdbId:    meta.imdbId,
         languages: ['ja'],
       });
-    }
+    });
 
     return results;
   } catch (err) {
@@ -67,18 +66,12 @@ export async function scrape(meta) {
   }
 }
 
-/**
- * Read a torznab:attr value by name from a feedparser item.
- */
-function getAttr(item, name) {
-  const attrs = item['torznab:attr'];
-  if (!attrs) return null;
-  const attrArray = Array.isArray(attrs) ? attrs : [attrs];
-  for (const attr of attrArray) {
-    if (attr['@'] && attr['@'].name === name) {
-      return attr['@'].value;
+function getAttr($, $item, name) {
+  let val = null;
+  $item.find('torznab\\:attr, attr').each((_, el) => {
+    if ($(el).attr('name') === name) {
+      val = $(el).attr('value');
     }
-  }
-  return null;
+  });
+  return val;
 }
-

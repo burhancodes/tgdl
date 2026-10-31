@@ -1,16 +1,14 @@
-/**
- * AnimeSaturn provider — scrapes animesaturn.cx for Italian-dubbed anime.
- * Returns magnet links extracted from torrent detail pages.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { buildSearchQuery } from '../lib/titleHelper.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const BASE = 'https://www.animesaturn.cx';
 
 export const id   = 'animesaturn';
 export const name = 'AnimeSaturn';
+export const types = ['series', 'anime'];
 
 export async function scrape(meta) {
   if (meta.type !== 'series' && meta.type !== 'anime') return [];
@@ -26,7 +24,6 @@ export async function scrape(meta) {
     const $ = cheerio.load(data);
     const results = [];
 
-    // Collect anime page links from search results
     const animeLinks = [];
     $('a.badge-archivio, div.anime-card-container a').each((_, a) => {
       const href = $(a).attr('href');
@@ -59,7 +56,6 @@ async function scrapeEpisodes(animeUrl, meta) {
       if (href) episodeLinks.push(href.startsWith('http') ? href : `${BASE}${href}`);
     });
 
-    // If requesting a specific episode, filter
     const targetLinks = meta.episode != null
       ? episodeLinks.filter(l => l.includes(`Ep-${meta.episode}-`))
       : episodeLinks.slice(0, 5);
@@ -100,9 +96,4 @@ async function scrapeEpisodeTorrent(epUrl, meta) {
   } catch {
     return null;
   }
-}
-
-function extractInfoHash(magnet = '') {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }

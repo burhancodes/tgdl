@@ -195,6 +195,9 @@ Settings commands and callbacks are strictly restricted to the bot owner (`OWNER
 | `SEARCH_LIMIT` | `int` | `300` | Live | Maximum search results returned by /ts |
 | `MAGNETIO_RPC_URL` | `string` | `http://magnetio-scraper:8080/rpc` | Restart Required | Magnetio sidecar HTTP RPC URL endpoint |
 | `MAGNETIO_RPC_SECRET` | `secret` | `*(empty)*` | Restart Required | Shared authentication secret for Magnetio RPC sidecar |
+| `SCRAPER_PROXY_URL` | `string` | `*(empty)*` | Restart Required | Outbound HTTP or SOCKS proxy URL for torrent scraper sidecar requests |
+| `SCRAPER_PROXY_PROVIDERS` | `string` | `*(empty)*` | Restart Required | Comma-separated list of scraper provider IDs that must use the proxy (empty for all) |
+| `SCRAPER_DISABLED_PROVIDERS` | `string` | `*(empty)*` | Restart Required | Comma-separated list of scraper provider IDs to disable |
 
 ### Logging
 

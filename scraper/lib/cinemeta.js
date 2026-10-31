@@ -39,17 +39,6 @@ async function fetchCinemeta(type, imdbId) {
   }
 }
 
-/**
- * Fetch title metadata from Cinemeta for a given IMDb ID.
- * Returns { name, year, imdbId, type, season, episode }
- *
- * Fallback strategy when the primary type returns nothing:
- *  1. Try the opposite type (movie <-> series)
- *  2. Return a minimal stub so providers can still search by IMDB ID
- *
- * Uses a 1h cache TTL so fallback/stub results get retried relatively soon.
- * Successful cinemeta hits also cache for 1h (harmless, the API is fast).
- */
 export async function getMetadata(type, id) {
   const parts = id.split(':');
   const imdbId = parts[0];
@@ -59,11 +48,9 @@ export async function getMetadata(type, id) {
   const cacheKey = `cinemeta:${type}:${imdbId}`;
 
   const { value: meta } = await cacheWrap(cacheKey, async () => {
-    // Primary lookup
     const primary = await fetchCinemeta(type, imdbId);
     if (primary) return primary;
 
-    // Fallback: try the opposite type
     const altType = type === 'movie' ? 'series' : 'movie';
     logger.info(`Cinemeta miss for ${type}/${imdbId}, trying ${altType}`);
     const alt = await fetchCinemeta(altType, imdbId);
@@ -72,7 +59,6 @@ export async function getMetadata(type, id) {
       return { ...alt, type };
     }
 
-    // Last resort: try fetching the title from IMDB directly
     const imdbTitle = await fetchImdbTitle(imdbId);
     if (imdbTitle) {
       logger.info(`IMDB fallback hit: ${imdbId} -> "${imdbTitle}"`);

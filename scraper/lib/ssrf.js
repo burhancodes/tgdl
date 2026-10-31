@@ -1,25 +1,8 @@
-/**
- * SSRF protection for user-supplied URLs (currently the Torznab base URL).
- *
- * The guard does two things:
- *   1. Resolves the hostname and range-checks every resolved IP against the
- *      private / reserved ranges (the "check").
- *   2. Returns a pinned `lookup` bound to the exact IP it just validated, so the
- *      socket connects to that same address (the "use").
- *
- * Pinning the verified IP closes the DNS-rebinding window: without it the
- * hostname is resolved once for validation and a second time by the HTTP client
- * at connect time, and an attacker controlling DNS could return a public IP for
- * the first lookup and a private one for the second (classic TOCTOU rebinding).
- *
- * Only Node built-ins are used (node:net / node:dns); no third-party IP parser.
- */
 import net from 'node:net';
 import dns from 'node:dns';
 
 const DNS_TIMEOUT_MS = 5_000;
 
-/** Reject `promise` if it does not settle within `ms`, so DNS cannot stall us. */
 function withTimeout(promise, ms) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -28,8 +11,6 @@ function withTimeout(promise, ms) {
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
-
-// ─── IPv4 helpers ───────────────────────────────────────────────────────────
 
 function ipv4ToInt(ip) {
   const parts = ip.split('.');
@@ -50,8 +31,6 @@ function inCidrV4(n, baseStr, bits) {
   return (n & mask) === (base & mask);
 }
 
-// Private, loopback, link-local (incl. cloud metadata 169.254.169.254), CGNAT,
-// broadcast, multicast, documentation and otherwise reserved IPv4 ranges.
 const UNSAFE_V4 = [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
   ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
@@ -64,13 +43,9 @@ function isUnsafeV4(n) {
   return UNSAFE_V4.some(([base, bits]) => inCidrV4(n, base, bits));
 }
 
-// ─── IPv6 helpers ───────────────────────────────────────────────────────────
-
-/** Expand any valid IPv6 text form (incl. embedded IPv4) to 16 bytes, else null. */
 function ipv6ToBytes(input) {
-  let ip = input.split('%')[0]; // drop zone id, e.g. fe80::1%eth0
+  let ip = input.split('%')[0];
 
-  // Fold a trailing embedded IPv4 (::ffff:1.2.3.4, ::1.2.3.4) into two hextets.
   if (ip.includes('.')) {
     const lastColon = ip.lastIndexOf(':');
     if (lastColon === -1) return null;
@@ -93,7 +68,7 @@ function ipv6ToBytes(input) {
     groups = head;
   } else {
     const missing = 8 - (head.length + tail.length);
-    if (missing < 1) return null; // '::' must stand for at least one group
+    if (missing < 1) return null;
     groups = [...head, ...Array(missing).fill('0'), ...tail];
   }
   if (groups.length !== 8) return null;
@@ -119,29 +94,19 @@ function bytesToV4Int(bytes, offset) {
 }
 
 function isUnsafeV6(bytes) {
-  // IPv4-mapped ::ffff:a.b.c.d, so validate the embedded IPv4.
   if (allZero(bytes, 0, 10) && bytes[10] === 0xff && bytes[11] === 0xff) {
     return isUnsafeV4(bytesToV4Int(bytes, 12));
   }
-  // IPv4-compatible / low addresses ::a.b.c.d (top 96 bits zero) incl. :: and ::1.
   if (allZero(bytes, 0, 12)) {
     return isUnsafeV4(bytesToV4Int(bytes, 12));
   }
-  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
-  if ((bytes[0] & 0xfe) === 0xfc) return true;                      // fc00::/7 unique-local
-  if (bytes[0] === 0xff) return true;                              // ff00::/8 multicast
-  // 2001:db8::/32 documentation
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true;
+  if ((bytes[0] & 0xfe) === 0xfc) return true;
+  if (bytes[0] === 0xff) return true;
   if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x0d && bytes[3] === 0xb8) return true;
   return false;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-/**
- * True when `ip` is not a globally-routable unicast address, i.e. it falls in a
- * private, loopback, link-local, CGNAT, multicast, reserved or documentation
- * range (or is not a valid IP at all). Unknown / unparseable input is unsafe.
- */
 export function isPrivateOrReservedIp(ip) {
   const kind = net.isIP(ip);
   if (kind === 4) return isUnsafeV4(ipv4ToInt(ip));
@@ -152,12 +117,6 @@ export function isPrivateOrReservedIp(ip) {
   return true;
 }
 
-/**
- * Build a Node `lookup(hostname, options, callback)` that always resolves to a
- * single pre-validated IP, regardless of what DNS would return. Re-checks the
- * address on every call as defense-in-depth, so it can never hand a
- * private/reserved IP to the socket even if reused for another host.
- */
 export function pinnedLookup(address, family) {
   const fam = family || net.isIP(address) || 4;
   return function lookup(hostname, options, callback) {
@@ -172,28 +131,11 @@ export function pinnedLookup(address, family) {
       callback(err);
       return;
     }
-    // Node may request the full list (options.all, used by autoSelectFamily).
     if (options.all) callback(null, [{ address, family: fam }]);
     else callback(null, address, fam);
   };
 }
 
-/**
- * Validate a user-supplied URL and pin the IP the request must connect to.
- *
- * Returns `{ url, hostname, address, family, lookup }` when the URL is http(s),
- * resolves, and every resolved address is public; otherwise `null`. Pass the
- * returned `lookup` to the HTTP client so it connects to `address` while still
- * sending the original hostname (Host header + TLS SNI stay intact).
- *
- * @param {string} urlStr
- * @param {object} [opts]
- * @param {(host: string, options: object) => Promise<Array<{address: string, family: number}>>} [opts.dnsLookup]
- *        DNS resolver override (defaults to dns.promises.lookup); injectable for tests.
- * @param {number} [opts.dnsTimeoutMs]
- *        Hard cap on the DNS resolution (default 5000ms); a slow/hostile resolver
- *        fails closed instead of stalling the request.
- */
 export async function resolveSafeTarget(urlStr, opts = {}) {
   let url;
   try {
@@ -207,8 +149,6 @@ export async function resolveSafeTarget(urlStr, opts = {}) {
   const hostname = url.hostname;
   if (!hostname) return null;
 
-  // Cheap denials for obvious internal names. The DNS-resolved IP check below is
-  // authoritative; these just reject before touching the resolver.
   const lower = hostname.toLowerCase();
   if (
     lower === 'localhost' ||
@@ -219,7 +159,6 @@ export async function resolveSafeTarget(urlStr, opts = {}) {
     return null;
   }
 
-  // URL keeps IPv6 literals bracketed ([::1]); net/dns want them unbracketed.
   const host = hostname.replace(/^\[|\]$/g, '');
 
   const dnsLookup = opts.dnsLookup || ((h, o) => dns.promises.lookup(h, o));
@@ -233,8 +172,6 @@ export async function resolveSafeTarget(urlStr, opts = {}) {
   }
   if (!Array.isArray(addresses) || addresses.length === 0) return null;
 
-  // Reject if ANY resolved address is unsafe: DNS round-robin could otherwise
-  // hand a private record to the socket even when the first one looked public.
   for (const entry of addresses) {
     if (!entry || isPrivateOrReservedIp(entry.address)) return null;
   }

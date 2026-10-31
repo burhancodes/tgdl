@@ -34,29 +34,32 @@ Search for torrents across multiple providers directly within Telegram.
 
 ### Syntax
 ```text
-/ts [provider_flags] <search_query>
-/torsearch [provider_flags] <search_query>
-/search [provider_flags] <search_query>
+/ts [-p provider] [-t type] <search_query>
+/torsearch [-p provider] [-t type] <search_query>
+/search [-p provider] [-t type] <search_query>
 ```
 
-### Supported Provider Flags
-Specify one or more provider flags to limit search to target indexers:
-- **Movie / Media Indexers**: `-yts`, `-tpb` / `-piratebay`, `-1337x` / `-leetx`, `-tgx` / `-torrentgalaxy`, `-kat` / `-kickass`, `-lime`, `-rarbg`, `-glo`
-- **Anime Indexers**: `-nyaa`, `-subsplease`, `-tosho` / `-animetosho`, `-neko`
-- **General / Russian Indexers**: `-bitsearch`, `-bt4g`, `-btdig`, `-torlock`, `-td`, `-eztv`, `-rutor`, `-rutracker`, `-torznab`
-- **Generic syntax**: `-p=<provider_id>` (e.g. `-p=yts`, `-p=thepiratebay`)
+### Supported Flags
+- **Category Filter (`-t` / `--type` or `-c` / `--category`)**:
+  - `movie` — search movies (e.g. YTS, 1337x, Bitsearch, ThePirateBay, etc.)
+  - `series` — search TV series (e.g. EZTV, 1337x, Bitsearch, etc.)
+  - `anime` — search anime indexers (e.g. Nyaa, Tokyo Toshokan, SubsPlease, AnimeTosho, etc.)
+  - `all` — (default) queries all providers matching their respective supported media types.
+- **Provider Flag (`-p` / `--provider`)**:
+  - Limit to specific providers, e.g. `-p nyaa`, `-p 1337x,yts,knaben`.
+  - Providers include: `1337x`, `animesaturn`, `animetosho`, `bitsearch`, `bt4g`, `btdig`, `eztv`, `glotorrents`, `kickasstorrents`, `knaben`, `limetorrents`, `nekobt`, `nyaa`, `rutor`, `rutracker`, `subsplease`, `thepiratebay`, `therarbg`, `tokyotosho`, `torlock`, `torrentdownloads`, `torrentgalaxy`, `torznab`, `yts`.
 
 ### Examples
 ```text
-/ts Avatar 2009                          # Search across all 22 enabled providers
-/ts -yts Inception                       # Search YTS provider only
-/ts -tpb -1337x Oppenheimer              # Search PirateBay and 1337x providers
-/search -nyaa Naruto Shippuden           # Search Nyaa anime provider only
-/torsearch -p=torrentgalaxy Dune Part 2  # Search TorrentGalaxy using generic flag
+/ts Avatar 2009                          # Search across all 24 enabled providers
+/ts -t anime Frieren                     # Search anime providers
+/ts -p yts Inception                     # Search YTS provider only
+/ts -p thepiratebay,1337x Oppenheimer    # Search PirateBay and 1337x providers
+/search -p nyaa Naruto Shippuden         # Search Nyaa anime provider only
 ```
 
 ### Key Search Engine Features
-- **Magnetio JSON-RPC Architecture**: Searches across 22 independent torrent providers (ThePirateBay, 1337x, YTS, Kickass, Nyaa, LimeTorrents, Bitsearch, BT4G, BTdig, etc.) via an isolated Node.js Express JSON-RPC 2.0 sidecar (`magnetio-scraper`).
+- **Magnetio JSON-RPC Architecture**: Searches across 24 independent torrent providers via an isolated Node.js Express JSON-RPC 2.0 sidecar (`magnetio-scraper`).
 - **Comprehensive Scrape Coverage**: Queries may take up to ~25s in worst-case scenarios to allow slower providers (e.g. TorrentGalaxy, GloTorrents, TheRarBG) to respond, maximizing search completeness.
 - **Inline Pagination & Telegraph Rendering**: View formatted HTML results directly in Telegram or full telegraph pages for large query results.
 - **1-Click Magnet Share**: Each search result includes pre-constructed magnet links for instant sharing and downloading via `/tor`.

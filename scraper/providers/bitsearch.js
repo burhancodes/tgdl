@@ -1,15 +1,14 @@
-/**
- * Bitsearch provider, scrapes search result cards with direct magnet links.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
+import { extractInfoHash } from '../lib/magnetHelper.js';
 import { logger } from '../lib/logger.js';
 
 const BASE = 'https://bitsearch.eu';
 
 export const id   = 'bitsearch';
 export const name = 'Bitsearch';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -56,11 +55,6 @@ export async function scrape(meta) {
     logger.warn(`[Bitsearch] ${err.message}`);
     return [];
   }
-}
-
-function extractInfoHash(magnet) {
-  const match = magnet.match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function parseLabeledInteger(text, label) {

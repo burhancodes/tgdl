@@ -1,9 +1,9 @@
 import { logger } from './logger.js';
 
 const domainHealth = new Map();
-const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
-const DEFAULT_RATELIMIT_MS = 10 * 60 * 1000;
-const COOLDOWN_MS = parseInt(process.env.SCRAPER_DOMAIN_COOLDOWN_MS ?? String(DEFAULT_COOLDOWN_MS), 10);
+const DEFAULT_COOLDOWN_MS    = 5 * 60 * 1000;
+const DEFAULT_RATELIMIT_MS   = 10 * 60 * 1000;
+const COOLDOWN_MS  = parseInt(process.env.SCRAPER_DOMAIN_COOLDOWN_MS  ?? String(DEFAULT_COOLDOWN_MS),  10);
 const RATELIMIT_MS = parseInt(process.env.SCRAPER_RATELIMIT_COOLDOWN_MS ?? String(DEFAULT_RATELIMIT_MS), 10);
 
 function cooldownFor(reason) {
@@ -75,7 +75,6 @@ export const PROVIDER_DOMAINS = {
     'https://1337x.gd',
     `https://1337x.${UNBLOCKIT}`,
   ],
-  // eztv.re now only 301s to eztvx.to; the others are EZTV's own mirrors.
   eztv: [
     'https://eztvx.to',
     'https://eztv.wf',
@@ -89,26 +88,20 @@ export const PROVIDER_DOMAINS = {
     `https://limetorrents.${UNBLOCKIT}`,
   ],
   kickasstorrents: [
-    'https://kickasstorrents.bz',
     'https://katcr.to',
     'https://kickasstorrents.to',
     `https://kickasstorrents.${UNBLOCKIT}`,
   ],
-  // torrentgalaxy.to no longer resolves and the unblockit proxy answers 429;
-  // .one and .info both serve the current /get-posts/ search.
   torrentgalaxy: [
     'https://torrentgalaxy.one',
     'https://torrentgalaxy.info',
   ],
   yts: [
     'https://yts.gg',
-    'https://movies-api.accel.li',
     'https://yts.do',
     'https://yts.mx',
     `https://yts.${UNBLOCKIT}`,
   ],
-  // Only apibay.org serves the q.php JSON API. thepiratebay.org redirects
-  // q.php to its HTML front end and the unblockit proxy returns HTML too.
   thepiratebay: [
     'https://apibay.org',
   ],
@@ -116,8 +109,6 @@ export const PROVIDER_DOMAINS = {
     'https://glodls.to',
     'https://gtso.cc',
   ],
-  // Bare torlock.com has a broken TLS certificate and torlock2.com only
-  // redirects; both sites serve search results on the www host.
   torlock: [
     'https://www.torlock2.com',
     'https://www.torlock.com',
@@ -126,8 +117,6 @@ export const PROVIDER_DOMAINS = {
     'http://rutor.info',
     'http://rutor.is',
   ],
-  // Only torrentdownload.info exposes info hashes in its search results.
-  // torrentdownloads.pro uses a different layout whose rows link to numeric ids.
   torrentdownloads: [
     'https://www.torrentdownload.info',
   ],

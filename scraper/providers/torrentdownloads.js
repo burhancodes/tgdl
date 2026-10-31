@@ -1,10 +1,3 @@
-/**
- * TorrentDownloads provider -- scrapes torrentdownload.info search results via HTML.
- *
- * Search lives at /search?q=<query>. The old /search/?search= form now serves
- * the homepage (latest uploads), so the search page is validated before
- * parsing. Each result links to /<INFOHASH>/<slug>, which yields the hash.
- */
 import * as cheerio from 'cheerio';
 import { get } from '../lib/httpClient.js';
 import { parseTitle, buildSearchQuery } from '../lib/titleHelper.js';
@@ -15,6 +8,7 @@ const DOMAINS = PROVIDER_DOMAINS.torrentdownloads;
 
 export const id   = 'torrentdownloads';
 export const name = 'TorrentDownloads';
+export const types = ['movie', 'series', 'anime'];
 
 export async function scrape(meta) {
   if (!meta?.name) return [];
@@ -28,15 +22,12 @@ export async function scrape(meta) {
         params: { q: query },
       });
     }, 'TorrentDownloads', {
-      // Search pages carry '1 - 50 of N for "<query>"' or 'No Results Found'.
       validate: ({ data }) => typeof data === 'string' && /\bof [\d,]+ for "|No Results Found/i.test(data),
     });
 
     const $ = cheerio.load(data);
     const results = [];
 
-    // Result rows: name | added | size | seeders | leechers. Sponsored rows
-    // at the top of the table link elsewhere and carry no hash.
     $('table.table2 tr').each((_, row) => {
       const $row  = $(row);
       const cells = $row.find('td');

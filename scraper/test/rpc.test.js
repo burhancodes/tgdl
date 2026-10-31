@@ -77,7 +77,6 @@ test('RPC authentication check', async () => {
   const app = createTestApp();
 
   try {
-    // Missing auth header/secret
     const unauth = await postRpc(app, {
       jsonrpc: '2.0',
       method: 'torrent.health',
@@ -85,7 +84,6 @@ test('RPC authentication check', async () => {
     });
     assert.equal(unauth.json.error.code, -32001);
 
-    // Header auth
     const authHeader = await postRpc(app, {
       jsonrpc: '2.0',
       method: 'torrent.health',
@@ -93,7 +91,6 @@ test('RPC authentication check', async () => {
     }, { Authorization: 'Bearer supersecret' });
     assert.equal(authHeader.json.result.status, 'ok');
 
-    // Param auth
     const authParam = await postRpc(app, {
       jsonrpc: '2.0',
       method: 'torrent.health',

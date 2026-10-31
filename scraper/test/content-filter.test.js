@@ -27,7 +27,6 @@ test('ID-matched series fail only on a marker for another season or episode', ()
   const pass = [
     'Game of Thrones Season 2 Complete',
     'Игра престолов (2 сезон: 1-10 серии из 10)',
-    // Russian labels are not parsed: no Latin marker, so the indexer is trusted
     'Игра престолов (Сезон 5)',
   ];
   const fail = [
@@ -59,4 +58,116 @@ test('series without an ID match still need the name and season', () => {
     'Game of Thrones S02E03 1080p',
     'Game of Thrones Season 2 Complete',
   ]);
+});
+
+const GODFATHER = { name: 'The Godfather', type: 'movie', imdbId: 'tt0068646', year: 1972 };
+const GOMORRA = { name: 'Gomorrah', type: 'series', imdbId: 'tt3281796', season: 1, episode: 2 };
+
+test('a release named after the localized title is kept when it is an alias', () => {
+  const records = [
+    record('Il.Padrino.1972.iTALiAN.AC3.BDRip.XviD'),
+    record('The.Godfather.1972.1080p.BluRay.x264'),
+  ];
+  assert.deepEqual(titles(records, GODFATHER), ['The.Godfather.1972.1080p.BluRay.x264']);
+  assert.deepEqual(
+    titles(records, { ...GODFATHER, aliases: ['Il Padrino'] }),
+    ['Il.Padrino.1972.iTALiAN.AC3.BDRip.XviD', 'The.Godfather.1972.1080p.BluRay.x264']
+  );
+});
+
+test('an alias does not widen the filter to unrelated content', () => {
+  const records = [
+    record('Il.Padrino.1972.iTALiAN.BDRip'),
+    record('Il.Postino.1994.iTALiAN.BDRip'),
+    record('Padre.Padrone.1977.iTALiAN.BDRip'),
+  ];
+  assert.deepEqual(
+    titles(records, { ...GODFATHER, aliases: ['Il Padrino'] }),
+    ['Il.Padrino.1972.iTALiAN.BDRip']
+  );
+});
+
+test('an alias still has to satisfy the season and episode check', () => {
+  const records = [
+    record('Gomorra.La.Serie.S01E02.iTALiAN.1080p'),
+    record('Gomorra.La.Serie.S02E02.iTALiAN.1080p'),
+    record('Gomorra.La.Serie.1x02.iTALiAN.1080p'),
+  ];
+  assert.deepEqual(
+    titles(records, { ...GOMORRA, aliases: ['Gomorra - La serie'] }),
+    ['Gomorra.La.Serie.S01E02.iTALiAN.1080p', 'Gomorra.La.Serie.1x02.iTALiAN.1080p']
+  );
+});
+
+test('accents in a localized title match the unaccented release name', () => {
+  const PARADISO = {
+    name: 'Cinema Paradiso', type: 'movie', imdbId: 'tt0095765', year: 1988,
+    aliases: ['Nuovo Cinema Paradiso'],
+  };
+  const records = [record('Nuovo.Cinema.Paradiso.1988.iTA.1080p.BluRay')];
+  assert.deepEqual(titles(records, PARADISO), ['Nuovo.Cinema.Paradiso.1988.iTA.1080p.BluRay']);
+
+  const AMELIE = { name: 'Amelie', type: 'movie', imdbId: 'tt0211915', year: 2001 };
+  assert.deepEqual(
+    titles([record('Amélie.2001.MULTi.1080p.BluRay')], AMELIE),
+    ['Amélie.2001.MULTi.1080p.BluRay']
+  );
+});
+
+test('an empty or non-Latin alias list leaves the filter unchanged', () => {
+  const records = [record('The.Godfather.1972.1080p'), record('Il.Padrino.1972.iTALiAN')];
+  for (const aliases of [[], undefined, ['Крёстный отец']]) {
+    assert.deepEqual(titles(records, { ...GODFATHER, aliases }), ['The.Godfather.1972.1080p']);
+  }
+});
+
+test('a short name joined to the localized title is kept when the year matches', () => {
+  const OBSESSION = { name: 'Obsession', type: 'movie', imdbId: 'tt0074991', year: 1976 };
+  const records = [
+    record('Obsession-Complesso di colpa (1976) ITA Ac3 2 0-ENG Ac3 5 1 sub ita BDRip 1080p'),
+    record('Obsession.1976.1080p.BluRay.x264'),
+    record('Obsession Revisited (2019) 1080p'),
+  ];
+  assert.deepEqual(titles(records, OBSESSION), [
+    'Obsession-Complesso di colpa (1976) ITA Ac3 2 0-ENG Ac3 5 1 sub ita BDRip 1080p',
+    'Obsession.1976.1080p.BluRay.x264',
+  ]);
+});
+
+const ONE_PIECE = {
+  name: 'One Piece', type: 'anime', imdbId: 'tt0388629',
+  year: 1999, season: 1, episode: 1095,
+};
+
+test('an absolute-numbered anime release is kept', () => {
+  const records = [
+    record('[SubsPlease] One Piece - 1095 (1080p) [1B78FACE].mkv'),
+    record('[CameEsp] One Piece - 1095 [720p][ESP-ENG][mkv].mkv'),
+    record('[New-raws] One Piece -1095 [1080p] [WEB].mkv'),
+  ];
+  assert.equal(titles(records, ONE_PIECE).length, 3);
+});
+
+test('the series episode rule is not applied to an anime request', () => {
+  const records = [record('[SubsPlease] One Piece - 1095 (1080p) [1B78FACE].mkv')];
+
+  assert.equal(titles(records, ONE_PIECE).length, 1);
+  assert.equal(titles(records, { ...ONE_PIECE, type: 'series' }).length, 0);
+});
+
+test('an unrelated release is still dropped from an anime request', () => {
+  const records = [
+    record('[SubsPlease] One Piece - 1095 (1080p).mkv'),
+    record('[Group] Naruto Shippuden - 500 (1080p).mkv'),
+    record('Some.Unrelated.Movie.2024.1080p.mkv'),
+  ];
+  assert.deepEqual(titles(records, ONE_PIECE), ['[SubsPlease] One Piece - 1095 (1080p).mkv']);
+});
+
+test('a series request still requires its season and episode tag', () => {
+  const records = [
+    record('Game.of.Thrones.S02E03.1080p.WEB-DL.x264'),
+    record('Game.of.Thrones.S05E09.1080p.WEB-DL.x264'),
+  ];
+  assert.deepEqual(titles(records, GOT), ['Game.of.Thrones.S02E03.1080p.WEB-DL.x264']);
 });
