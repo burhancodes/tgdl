@@ -692,17 +692,26 @@ func (m *Manager) archiveAll(st *State, args dl.Args) error {
 			if displayName == "" {
 				displayName = filepath.Base(p)
 			}
+			var mu sync.Mutex
+			var wg sync.WaitGroup
 			var lastLink string
 			var lastErr error
 			for _, h := range selected {
-				link, err := m.d.Hosts.UploadWithRetry(ctx, h, p, displayName, uid, retries, nil)
-				if err != nil {
-					lastErr = err
-				} else {
-					lastLink = link
-					st.addPDLink(fmt.Sprintf("%s (%s)", displayName, h.Name()), link)
-				}
+				wg.Add(1)
+				go func(host upload.HostID) {
+					defer wg.Done()
+					link, err := m.d.Hosts.UploadWithRetry(ctx, host, p, displayName, uid, retries, nil)
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil {
+						lastErr = err
+					} else {
+						lastLink = link
+						st.addPDLink(fmt.Sprintf("%s (%s)", displayName, host.Name()), link)
+					}
+				}(h)
 			}
+			wg.Wait()
 			if lastLink != "" {
 				return lastLink, nil
 			}

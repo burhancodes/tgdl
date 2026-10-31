@@ -77,15 +77,18 @@ The `/mega` (or `/meganz`) command downloads files and full folder hierarchies f
 
 ## Mirror Mode (`/m`, `/mirror`)
 
-The `/m` (or `/mirror`) command downloads content and stores it on server storage.
+The `/m` (or `/mirror`) command mirrors content to enabled cloud hosts (GoFile, FileDitch, Pixeldrain).
 
 ### Syntax
 ```text
-/m [-tg] <url>
-/mirror [-tg] <url>
+/m [-to hosts] [-tg] [-uz] <url>
+/mirror [-to hosts] [-tg] [-uz] <url>
 ```
-- Replying to a Telegram message with `/m` mirrors the Telegram file to server storage.
-- Using `-tg` flag forces re-upload back to Telegram.
+- Replying to a Telegram message with `/m` mirrors the Telegram file.
+- Direct host commands: `/gofile` (or `/gf`), `/fileditch` (or `/fd`), `/pixeldrain` (or `/pd`).
+- `-to <hosts>` selects specific hosts (e.g. `-to gofile,pd`).
+- `-tg` forces uploading to Telegram in addition to mirroring.
+- `-uz` automatically extracts archives before mirroring.
 
 ---
 
@@ -95,7 +98,8 @@ The following flags can be passed to `/dl`, `/gdl`, `/mega`, `/direct`, `/galler
 
 | Flag | Aliases | Description |
 | :--- | :--- | :--- |
-| `-m` | `-mirror`, `--mirror` | Enable server mirror mode instead of default upload behavior. |
+| `-m` | `-mirror`, `--mirror` | Enable mirror mode instead of default upload behavior. |
+| `-to <hosts>` | `--to` | Target specific mirror hosts (e.g. `gofile,pd,fd`). |
 | `-tg` | `--tg` | Force upload output back to Telegram. |
 | `-uz` | `-unzip`, `--unzip` | Automatically extract downloaded archive files upon completion. |
 | `-p <pass>` | `-pass`, `--pass`, `--password` | Specify decryption password for protected archives. |

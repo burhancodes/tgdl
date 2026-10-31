@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -339,78 +338,12 @@ func (h *Hosts) uploadOnce(ctx context.Context, host HostID, path, displayName s
 	case GoFile:
 		return h.gofile(ctx, path, displayName, uid, cb)
 	case FileDitch:
-		return h.fileditch(ctx, path, displayName, false, cb)
+		return h.fileditch(ctx, path, displayName, uid, cb)
 	case Pixeldrain:
 		return h.pixeldrain(ctx, path, displayName, uid, cb)
 	default:
 		return "", fmt.Errorf("unknown mirror host: %q", host)
 	}
-}
-
-func (h *Hosts) Pixeldrain(ctx context.Context, path string, uid int64, cb ProgressFunc) (string, error) {
-	return h.Upload(ctx, Pixeldrain, path, "", uid, cb)
-}
-
-func (h *Hosts) Gofile(ctx context.Context, path string, uid int64, cb ProgressFunc) (string, error) {
-	return h.Upload(ctx, GoFile, path, "", uid, cb)
-}
-
-func (h *Hosts) Fileditch(ctx context.Context, path string, temp bool, cb ProgressFunc) (string, error) {
-	return h.fileditch(ctx, path, "", temp, cb)
-}
-
-func (h *Hosts) pixeldrain(ctx context.Context, path, displayName string, uid int64, cb ProgressFunc) (string, error) {
-	f, size, err := statFile(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if displayName == "" {
-		displayName = filepath.Base(path)
-	}
-	key := strings.TrimSpace(h.keys.Resolve(uid, string(Pixeldrain)))
-	domain := "pixeldrain.com"
-	if h.cfg != nil && h.cfg.PixeldrainDomain != "" {
-		domain = h.cfg.PixeldrainDomain
-	}
-	endpoint := fmt.Sprintf("https://%s/api/file/%s", domain, url.PathEscape(displayName))
-	if ep := h.endpoints[Pixeldrain]; ep != "" {
-		if strings.HasSuffix(ep, "/") {
-			endpoint = ep + url.PathEscape(displayName)
-		} else {
-			endpoint = ep + "/" + url.PathEscape(displayName)
-		}
-	}
-	body := &countingReader{r: f, total: size, cb: cb, ctx: ctx}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, body)
-	if err != nil {
-		return "", err
-	}
-	req.ContentLength = size
-	if key != "" {
-		req.SetBasicAuth("", key)
-	} else {
-		slog.Info("pixeldrain: no API key, attempting anonymous upload")
-	}
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	var out struct {
-		Success bool   `json:"success"`
-		ID      string `json:"id"`
-		Message string `json:"message"`
-	}
-	if err := decode(resp, &out); err != nil {
-		return "", fmt.Errorf("pixeldrain upload failed: %w", err)
-	}
-	if out.ID == "" {
-		return "", fmt.Errorf("pixeldrain upload failed: %s", out.Message)
-	}
-	if ep := h.endpoints[Pixeldrain]; ep != "" {
-		return fmt.Sprintf("%s/u/%s", strings.TrimRight(ep, "/"), out.ID), nil
-	}
-	return fmt.Sprintf("https://%s/u/%s", domain, out.ID), nil
 }
 
 func (h *Hosts) multipartUpload(ctx context.Context, endpoint, field, path, displayName string, extra map[string]string, hdr map[string]string, cb ProgressFunc, v any) error {
@@ -461,66 +394,6 @@ func (h *Hosts) multipartUpload(ctx context.Context, endpoint, field, path, disp
 		return err
 	}
 	return decode(resp, v)
-}
-
-func (h *Hosts) gofile(ctx context.Context, path, displayName string, uid int64, cb ProgressFunc) (string, error) {
-	tok := strings.TrimSpace(h.keys.Resolve(uid, string(GoFile)))
-	hdr := map[string]string{}
-	if tok != "" {
-		hdr["Authorization"] = "Bearer " + tok
-	}
-	endpoint := "https://upload.gofile.io/uploadfile"
-	if ep := h.endpoints[GoFile]; ep != "" {
-		endpoint = ep
-	}
-	var out struct {
-		Status string `json:"status"`
-		Data   struct {
-			DownloadPage string `json:"downloadPage"`
-		} `json:"data"`
-	}
-	if err := h.multipartUpload(ctx, endpoint, "file", path, displayName, nil, hdr, cb, &out); err != nil {
-		return "", fmt.Errorf("gofile upload failed: %w", err)
-	}
-	if out.Status != "ok" || out.Data.DownloadPage == "" {
-		return "", fmt.Errorf("gofile API returned error status %q", out.Status)
-	}
-	return out.Data.DownloadPage, nil
-}
-
-func (h *Hosts) fileditch(ctx context.Context, path, displayName string, temp bool, cb ProgressFunc) (string, error) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	if st.Size() == 0 {
-		return "", errors.New("file is empty (0 bytes)")
-	}
-	endpoint := "https://new.fileditch.com/upload.php"
-	if temp {
-		endpoint = "https://temp.fileditch.com/upload.php"
-	}
-	if ep := h.endpoints[FileDitch]; ep != "" {
-		endpoint = ep
-	}
-	var out struct {
-		Success bool   `json:"success"`
-		URL     string `json:"url"`
-		Files   []struct {
-			URL string `json:"url"`
-		} `json:"files"`
-	}
-	if err := h.multipartUpload(ctx, endpoint, "files[]", path, displayName, nil, nil, cb, &out); err != nil {
-		return "", fmt.Errorf("fileditch upload failed: %w", err)
-	}
-	u := out.URL
-	if u == "" && len(out.Files) > 0 {
-		u = out.Files[0].URL
-	}
-	if !out.Success || u == "" {
-		return "", errors.New("fileditch API returned an error")
-	}
-	return u, nil
 }
 
 type Result struct {

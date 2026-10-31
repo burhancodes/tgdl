@@ -243,6 +243,7 @@ func (a *App) register(b *tgbot.Bot) {
 	cmd([]string{"unzip"}, a.cmdUnzip)
 	cmd([]string{"gofilekey", "gofile_key"}, a.cmdKey("gofile", "GoFile"))
 	cmd([]string{"pdkey", "pixeldrainkey", "pd_key"}, a.cmdKey("pixeldrain", "Pixeldrain"))
+	cmd([]string{"fdkey", "fileditchkey", "fd_key"}, a.cmdKey("fileditch", "FileDitch"))
 	cmd([]string{"cookies"}, a.cmdCookies)
 	cmd([]string{"gdlconf"}, a.cmdGDLConf)
 	cmd([]string{"rename"}, a.cmdRename)

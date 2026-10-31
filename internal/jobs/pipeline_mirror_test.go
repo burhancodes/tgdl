@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/burhanverse/tgdl/internal/config"
 	"github.com/burhanverse/tgdl/internal/pacing"
@@ -290,5 +292,80 @@ func TestPipeline_Resume_PersistedMirrorHosts(t *testing.T) {
 	}
 	if selected[0] != upload.GoFile || selected[1] != upload.Pixeldrain {
 		t.Errorf("expected [gofile, pixeldrain], got %v", selected)
+	}
+}
+
+func TestPipeline_ParallelUploadsToAllHosts(t *testing.T) {
+	mgr, hosts, _, _, cfg := setupTestPipelineManager(t, "gofile,fileditch,pixeldrain")
+
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	allActiveCh := make(chan struct{})
+	var closeOnce sync.Once
+
+	handler := func(response string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			cur := active.Add(1)
+			defer active.Add(-1)
+			for {
+				m := maxActive.Load()
+				if cur <= m || maxActive.CompareAndSwap(m, cur) {
+					break
+				}
+			}
+			if cur == 3 {
+				closeOnce.Do(func() { close(allActiveCh) })
+			}
+			select {
+			case <-allActiveCh:
+			case <-time.After(5 * time.Second):
+			}
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(response))
+		}
+	}
+
+	srvGF := httptest.NewServer(handler(`{"status":"ok","data":{"downloadPage":"https://gofile.io/d/parallel123"}}`))
+	defer srvGF.Close()
+
+	srvFD := httptest.NewServer(handler(`{"success":true,"url":"https://fileditch.com/parallel123"}`))
+	defer srvFD.Close()
+
+	srvPD := httptest.NewServer(handler(`{"success":true,"id":"parallel123"}`))
+	defer srvPD.Close()
+
+	hosts.SetEndpoint(upload.GoFile, srvGF.URL)
+	hosts.SetEndpoint(upload.FileDitch, srvFD.URL)
+	hosts.SetEndpoint(upload.Pixeldrain, srvPD.URL)
+
+	dest := filepath.Join(cfg.DownloadsDir(), "job_parallel")
+	_ = os.MkdirAll(dest, 0o755)
+	filePath := filepath.Join(dest, "parallel.bin")
+	if err := os.WriteFile(filePath, []byte("parallel mirror content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := &store.Job{
+		ID:     "parallel_job",
+		ChatID: 100,
+		URL:    "mirror:http://example.com/parallel.bin",
+		Args:   `{"is_mirror": true}`,
+	}
+	st := newState(job, dest, dest+"_extract", context.Background())
+
+	rec := mgr.mirrorFile(st, filePath)
+
+	if maxActive.Load() != 3 {
+		t.Errorf("expected 3 concurrent uploads, but max active was %d", maxActive.Load())
+	}
+	if rec.Links["gofile"] != "https://gofile.io/d/parallel123" {
+		t.Errorf("unexpected gofile link: %s", rec.Links["gofile"])
+	}
+	if rec.Links["fileditch"] != "https://fileditch.com/parallel123" {
+		t.Errorf("unexpected fileditch link: %s", rec.Links["fileditch"])
+	}
+	if rec.Links["pixeldrain"] != srvPD.URL+"/u/parallel123" {
+		t.Errorf("unexpected pixeldrain link: %s", rec.Links["pixeldrain"])
 	}
 }

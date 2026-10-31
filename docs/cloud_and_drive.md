@@ -78,13 +78,19 @@ Upload Telegram media files directly to third-party file hosting services using 
   /pdkey                           # Check current key status
   /pdkey delete                    # Remove saved key
   ```
+- **FileDitch Login Token**:
+  ```text
+  /fdkey <your_login_token>        # Set your FileDitch login token (API key)
+  /fdkey                           # Check current key status
+  /fdkey delete                    # Remove saved key
+  ```
 
 > _Note: If no personal API key is set, uploads default to anonymous mode. Set `ALLOW_SHARED_UPLOAD_KEYS=true` in `.env` if you want users to fall back to the bot owner's global API keys._
 
-### Commands
+### Commands & Limits
 
-| Host | Command | Aliases | Usage |
-| :--- | :--- | :--- | :--- |
-| **Pixeldrain** | `/pdup` | — | Reply to any Telegram file or video message with `/pdup`. |
-| **GoFile** | `/gfup` | `/gofile` | Reply to any Telegram file or video message with `/gfup` or `/gofile`. |
-| **FileDitch** | `/fdup` | `/fileditch` | Reply to any Telegram file or video message with `/fdup` or `/fileditch`. |
+| Host | Command | Aliases | Limit | Usage |
+| :--- | :--- | :--- | :--- | :--- |
+| **GoFile** | `/gfup` | `/gofile`, `/gf` | Unlimited | Reply to a Telegram file or mirror URLs. |
+| **FileDitch** | `/fdup` | `/fileditch`, `/fd` | 150 GB (250 GB with account) | Reply to a Telegram file or mirror URLs. |
+| **Pixeldrain** | `/pdup` | `/pixeldrain`, `/pd` | 10 GiB | Reply to a Telegram file or mirror URLs. |

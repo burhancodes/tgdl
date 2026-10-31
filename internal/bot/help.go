@@ -27,7 +27,7 @@ var helpPages = map[string]string{
 		"• <code>/mega &lt;link&gt;</code> — MEGA file or folder\n" +
 		"• <code>/gofile &lt;link&gt;</code> — GoFile download via bypass proxy\n" +
 		"• <code>/m</code>, <code>/gofile</code>, <code>/fileditch</code>, <code>/pixeldrain</code> (aliases: <code>/gf</code>, <code>/fd</code>, <code>/pd</code>) — mirror URLs or replied files\n" +
-		"• <code>/gofilekey</code>, <code>/pdkey</code> — store your personal API keys",
+		"• <code>/gofilekey</code>, <code>/pdkey</code>, <code>/fdkey</code> — store your personal API keys",
 	"cookies": "<b>Cookies</b>\n" +
 		"• <code>/cookies</code> — reply to cookies.txt to save it (used by gallery-dl and cyberdrop-dl)\n" +
 		"• <code>/cookies delete</code> — delete saved cookies",

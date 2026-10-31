@@ -86,9 +86,13 @@ func TestNoComments(t *testing.T) {
 		"internal/torrent/magnetio.go",
 		"internal/torrent/magnetio_test.go",
 		"internal/torrent/trackers.go",
+		"internal/upload/fileditch.go",
+		"internal/upload/fileditch_test.go",
+		"internal/upload/gofile.go",
 		"internal/upload/hosts.go",
 		"internal/upload/hosts_test.go",
 		"internal/upload/keys.go",
+		"internal/upload/pixeldrain.go",
 	}
 
 	settingsDir := filepath.Join(root, "internal", "settings")

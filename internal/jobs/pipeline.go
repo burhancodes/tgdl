@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/burhanverse/tgdl/internal/archive"
@@ -707,20 +708,6 @@ func (m *Manager) mirrorFile(st *State, path string) MirrorRecord {
 	var hostOrder []string
 	labels := make(map[string]string, len(selected))
 
-	for _, h := range selected {
-		k := string(h)
-		hostOrder = append(hostOrder, k)
-		labels[k] = h.Name()
-		if limit := h.MaxBytes(); limit > 0 && fileSize > limit {
-			reason := fmt.Sprintf("too large for %s (10 GiB limit)", h.Name())
-			hosts[k] = status.HostState{Status: "skipped", Error: reason}
-		} else {
-			hosts[k] = status.HostState{Status: "pending"}
-		}
-	}
-
-	st.setHostsWithOrder(hosts, hostOrder, labels)
-
 	fn := st.FileName(path)
 	displayName := fn.Display
 	if displayName == "" {
@@ -738,49 +725,76 @@ func (m *Manager) mirrorFile(st *State, path string) MirrorRecord {
 		retries = m.d.Cfg.MirrorRetries
 	}
 
+	skipped := make(map[string]bool, len(selected))
 	for _, h := range selected {
 		k := string(h)
-		if hosts[k].Status == "skipped" {
-			rec.Errors[k] = hosts[k].Error
+		hostOrder = append(hostOrder, k)
+		labels[k] = h.Name()
+		if limit := h.MaxBytes(); limit > 0 && fileSize > limit {
+			reason := fmt.Sprintf("too large for %s (10 GiB limit)", h.Name())
+			hosts[k] = status.HostState{Status: "skipped", Error: reason}
+			skipped[k] = true
+			rec.Errors[k] = reason
+		} else {
+			hosts[k] = status.HostState{Status: "uploading"}
+		}
+	}
+
+	st.setHostsWithOrder(hosts, hostOrder, labels)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, h := range selected {
+		k := string(h)
+		if skipped[k] {
 			continue
 		}
 		if st.ctx.Err() != nil {
 			break
 		}
 
-		var lastAt time.Time
-		var lastB int64
-		var speed float64
-		cb := func(cur, total int64) {
-			now := time.Now()
-			if lastAt.IsZero() {
-				lastAt, lastB = now, cur
-			} else if dt := now.Sub(lastAt).Seconds(); dt >= 1 {
-				speed = max(0, float64(cur-lastB)/dt)
-				lastAt, lastB = now, cur
+		wg.Add(1)
+		go func(host upload.HostID) {
+			defer wg.Done()
+			key := string(host)
+			var lastAt time.Time
+			var lastB int64
+			var speed float64
+			cb := func(cur, total int64) {
+				now := time.Now()
+				if lastAt.IsZero() {
+					lastAt, lastB = now, cur
+				} else if dt := now.Sub(lastAt).Seconds(); dt >= 1 {
+					speed = max(0, float64(cur-lastB)/dt)
+					lastAt, lastB = now, cur
+				}
+				pct := 0.0
+				if total > 0 {
+					pct = float64(cur) / float64(total) * 100
+				}
+				mu.Lock()
+				hosts[key] = status.HostState{Status: "uploading", Pct: pct, Speed: speed}
+				st.setHostsWithOrder(hosts, hostOrder, labels)
+				mu.Unlock()
 			}
-			pct := 0.0
-			if total > 0 {
-				pct = float64(cur) / float64(total) * 100
+
+			link, err := m.d.Hosts.UploadWithRetry(st.ctx, host, path, displayName, uid, retries, cb)
+
+			mu.Lock()
+			if err != nil {
+				slog.Warn("mirror upload failed", "host", key, "file", displayName, "err", err)
+				hosts[key] = status.HostState{Status: "failed", Error: err.Error()}
+				rec.Errors[key] = err.Error()
+			} else {
+				hosts[key] = status.HostState{Status: "done", URL: link}
+				rec.Links[key] = link
 			}
-			hosts[k] = status.HostState{Status: "uploading", Pct: pct, Speed: speed}
 			st.setHostsWithOrder(hosts, hostOrder, labels)
-		}
-
-		hosts[k] = status.HostState{Status: "uploading"}
-		st.setHostsWithOrder(hosts, hostOrder, labels)
-
-		link, err := m.d.Hosts.UploadWithRetry(st.ctx, h, path, displayName, uid, retries, cb)
-		if err != nil {
-			slog.Warn("mirror upload failed", "host", k, "file", displayName, "err", err)
-			hosts[k] = status.HostState{Status: "failed", Error: err.Error()}
-			rec.Errors[k] = err.Error()
-		} else {
-			hosts[k] = status.HostState{Status: "done", URL: link}
-			rec.Links[k] = link
-		}
-		st.setHostsWithOrder(hosts, hostOrder, labels)
+			mu.Unlock()
+		}(h)
 	}
+	wg.Wait()
 
 	return rec
 }

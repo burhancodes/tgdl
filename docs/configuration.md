@@ -130,12 +130,13 @@ When running a self-hosted `telegram-bot-api` server in `--local` mode (enabled 
 - `MIRROR_HOSTS`: Comma-separated list of globally enabled mirror hosts (default `gofile,fileditch,pixeldrain`).
 - `MIRROR_RETRIES`: Number of retry attempts on network error, timeouts, 5xx, or 429 (default `3`).
 - `PIXELDRAIN_API_KEY`: Global/owner Pixeldrain API key.
-- `GOFILE_API_TOKEN`: Global/owner GoFile API token.
+- `GOFILE_API_KEY`: Global/owner GoFile API key.
 
 Commands & Flags:
-- `/m [-to hosts] [-tg] [-uz] [-p pass] <url...>`: Mirror to enabled hosts (or specific hosts via `-to gofile,pd`).
+- `/m [-to hosts] [-tg] [-uz] [-p pass] <url...>`: Mirror to enabled hosts (or specific hosts via `-to gofile,pd,fd`).
 - `/gofile [-tg] [-uz] <url...>` (aliases: `/gf`, `/gfup`): Mirror directly to GoFile (or download if a GoFile link is passed).
-- `/fileditch [-tg] [-uz] <url...>` (aliases: `/fd`, `/fdup`): Mirror directly to FileDitch.
-- `/pixeldrain [-tg] [-uz] <url...>` (aliases: `/pd`, `/pdup`): Mirror directly to Pixeldrain.
+- `/fileditch [-tg] [-uz] <url...>` (aliases: `/fd`, `/fdup`): Mirror directly to FileDitch (150 GB limit, 250 GB with account).
+- `/pixeldrain [-tg] [-uz] <url...>` (aliases: `/pd`, `/pdup`): Mirror directly to Pixeldrain (10 GiB limit).
+- Personal keys: `/gofilekey`, `/pdkey`, `/fdkey` to store per-user account keys or tokens.
 - Flags: `-to` selects mirror hosts, `-tg` also uploads to Telegram, `-uz` extracts archives before mirroring.
 

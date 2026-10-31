@@ -51,9 +51,10 @@ The extension (`.mkv`, `.mp4` …) is kept automatically. See [docs/rename.md](d
 Mirror files and links to GoFile, FileDitch, and Pixeldrain:
 * `/m [-to hosts] [-tg] [-uz] <url…>` — mirror to enabled hosts (or specific hosts with `-to gofile,pd`)
 * `/gofile <url…>` or `/gf` — mirror directly to GoFile (or download if a GoFile URL is passed)
-* `/fileditch <url…>` or `/fd` — mirror directly to FileDitch
-* `/pixeldrain <url…>` or `/pd` — mirror directly to Pixeldrain
+* `/fileditch <url…>` or `/fd` — mirror directly to FileDitch (up to 150 GB, or 250 GB with account)
+* `/pixeldrain <url…>` or `/pd` — mirror directly to Pixeldrain (up to 10 GiB)
 * Pass `-tg` to also upload to Telegram, and `-uz` to extract archives before mirroring. Reply to any media or URL list.
+* Store personal API keys or login tokens with `/gofilekey`, `/pdkey`, and `/fdkey`.
 
 ## Configuration & Runtime Settings
 
