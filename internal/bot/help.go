@@ -16,7 +16,7 @@ var helpPages = map[string]string{
 		"<code>-to</code> selects mirror hosts (e.g. -to gofile,pd), <code>-m</code> mirrors to web hosts, <code>-tg</code> also uploads to Telegram, <code>-uz</code> extracts archives.",
 	"tor": "<b>Torrents &amp; aria2</b>\n" +
 		"• <code>/tor &lt;magnet | .torrent URL&gt;</code> or reply to a .torrent file\n" +
-		"• <code>/aria &lt;url&gt; [-c N] [-s N] [--header 'K: V'] [--out NAME] [--opt k=v]</code>\n" +
+		"• <code>/aria &lt;url&gt; [-c N] [-s N] [--select N] [--cookie 'K=V'] [--out NAME] [--opt k=v]</code>\n" +
 		"• <code>/ts [-p provider] [-t type] &lt;query&gt;</code> — search torrent indexers",
 	"unzip": "<b>Archives</b>\n" +
 		"• <code>/unzip [-p pass]</code> — reply to an archive (or pass a URL); split volumes are detected automatically\n" +

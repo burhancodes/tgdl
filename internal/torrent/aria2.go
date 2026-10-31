@@ -38,6 +38,20 @@ type Progress struct {
 
 type ProgressFunc func(Progress)
 
+type Status struct {
+	GID             string
+	Status          string
+	ErrorCode       string
+	ErrorMessage    string
+	CompletedLength int64
+	TotalLength     int64
+	DownloadSpeed   int64
+	NumSeeders      int
+	Connections     int
+	FollowedBy      []string
+	Name            string
+}
+
 type Aria2 struct {
 	cfg      *config.Config
 	trackers *Trackers
@@ -87,7 +101,9 @@ func (a *Aria2) Start(ctx context.Context) error {
 	if a.cmd != nil && a.alive() {
 		port := a.port
 		a.mu.Unlock()
-		_, _ = a.call(ctx, port, "aria2.changeGlobalOption", map[string]any{"max-overall-download-limit": speedOpt(a.cfg.GlobalSpeedLimit)})
+		if a.cfg != nil {
+			_, _ = a.call(ctx, port, "aria2.changeGlobalOption", map[string]any{"max-overall-download-limit": speedOpt(a.cfg.GlobalSpeedLimit)})
+		}
 		return nil
 	}
 	a.mu.Unlock()
@@ -96,7 +112,9 @@ func (a *Aria2) Start(ctx context.Context) error {
 		slog.Warn("aria2c is not installed; torrent/aria downloads will fail")
 		return nil
 	}
-	a.trackers.Refresh(ctx)
+	if a.trackers != nil {
+		a.trackers.Refresh(ctx)
+	}
 
 	port, err := freePort()
 	if err != nil {
@@ -109,39 +127,58 @@ func (a *Aria2) Start(ctx context.Context) error {
 	secret := hex.EncodeToString(sec[:])
 
 	maxConcurrent := 1
-	if a.cfg.AriaMaxConcurrentDL > 0 {
+	if a.cfg != nil && a.cfg.AriaMaxConcurrentDL > 0 {
 		maxConcurrent = a.cfg.AriaMaxConcurrentDL
+	}
+
+	logDir := "."
+	if a.cfg != nil && a.cfg.LogDir != "" {
+		logDir = a.cfg.LogDir
 	}
 
 	args := []string{
 		"--enable-rpc", "--rpc-listen-all=false",
 		"--rpc-listen-port=" + strconv.Itoa(port),
 		"--rpc-secret=" + secret,
-		"--log=" + filepath.Join(a.cfg.LogDir, "aria2c_daemon.log"),
+		"--log=" + filepath.Join(logDir, "aria2c_daemon.log"),
 		"--log-level=warn",
 		"--console-log-level=warn",
 		"--file-allocation=none",
 		"--disk-cache=32M",
 		"--max-concurrent-downloads=" + strconv.Itoa(maxConcurrent),
+		"--continue=true",
+		"--allow-overwrite=true",
+		"--auto-file-renaming=false",
+		"--max-connection-per-server=16",
+		"--split=16",
+		"--min-split-size=1M",
+		"--http-accept-gzip=true",
+		"--reuse-uri=true",
+		"--summary-interval=0",
+		"--peer-id-prefix=-TR3000-",
+		"--peer-agent=Transmission/3.00",
 		"--bt-max-peers=60",
 		"--bt-max-open-files=20",
-		"--max-connection-per-server=4",
 		"--seed-time=0", "--seed-ratio=0.0",
 		"--bt-tracker-connect-timeout=10", "--bt-tracker-timeout=10",
 		"--enable-dht=true", "--bt-enable-lpd=true", "--enable-peer-exchange=true",
 		"--max-overall-upload-limit=50K",
 		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-		"--bt-tracker=" + a.trackers.CSV(),
 	}
-	if a.cfg.ForceIPv6 || a.cfg.SourceAddress != "" {
-		src := a.cfg.SourceAddress
-		if src == "" {
-			src = "::"
+	if a.trackers != nil && a.trackers.CSV() != "" {
+		args = append(args, "--bt-tracker="+a.trackers.CSV())
+	}
+	if a.cfg != nil {
+		if a.cfg.ForceIPv6 || a.cfg.SourceAddress != "" {
+			src := a.cfg.SourceAddress
+			if src == "" {
+				src = "::"
+			}
+			args = append(args, "--disable-ipv6=false", "--enable-dht6=true", "--async-dns=true", "--interface="+src)
 		}
-		args = append(args, "--disable-ipv6=false", "--enable-dht6=true", "--async-dns=true", "--interface="+src)
-	}
-	if pacing.ParseSpeedLimit(a.cfg.GlobalSpeedLimit) > 0 {
-		args = append(args, "--max-overall-download-limit="+a.cfg.GlobalSpeedLimit)
+		if pacing.ParseSpeedLimit(a.cfg.GlobalSpeedLimit) > 0 {
+			args = append(args, "--max-overall-download-limit="+a.cfg.GlobalSpeedLimit)
+		}
 	}
 
 	cmd := exec.Command("aria2c", args...)
@@ -242,7 +279,18 @@ func (a *Aria2) call(ctx context.Context, port int, method string, params ...any
 	return out.Result, nil
 }
 
-type status struct {
+func (a *Aria2) rpc(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
+	a.mu.Lock()
+	port, alive := a.port, a.cmd != nil && a.alive()
+	a.mu.Unlock()
+	if !alive {
+		return nil, errors.New("aria2c daemon is not running")
+	}
+	return a.call(ctx, port, method, params...)
+}
+
+type rawStatus struct {
+	GID             string   `json:"gid"`
 	Status          string   `json:"status"`
 	ErrorCode       string   `json:"errorCode"`
 	ErrorMessage    string   `json:"errorMessage"`
@@ -264,6 +312,39 @@ type status struct {
 
 func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 
+func parseRawStatus(r rawStatus) Status {
+	name := r.Bittorrent.Info.Name
+	if name == "" && len(r.Files) > 0 && r.Files[0].Path != "" {
+		name = filepath.Base(r.Files[0].Path)
+	}
+	return Status{
+		GID:             r.GID,
+		Status:          r.Status,
+		ErrorCode:       r.ErrorCode,
+		ErrorMessage:    r.ErrorMessage,
+		CompletedLength: atoi64(r.CompletedLength),
+		TotalLength:     atoi64(r.TotalLength),
+		DownloadSpeed:   atoi64(r.DownloadSpeed),
+		NumSeeders:      int(atoi64(r.NumSeeders)),
+		Connections:     int(atoi64(r.Connections)),
+		FollowedBy:      r.FollowedBy,
+		Name:            name,
+	}
+}
+
+func (a *Aria2) TellStatus(ctx context.Context, gid string) (*Status, error) {
+	raw, err := a.rpc(ctx, "aria2.tellStatus", gid)
+	if err != nil {
+		return nil, err
+	}
+	var r rawStatus
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	st := parseRawStatus(r)
+	return &st, nil
+}
+
 type Handle struct {
 	a   *Aria2
 	gid string
@@ -274,12 +355,9 @@ func (h *Handle) Kill() {
 	h.mu.Lock()
 	gid := h.gid
 	h.mu.Unlock()
-	h.a.mu.Lock()
-	port := h.a.port
-	h.a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := h.a.call(ctx, port, "aria2.forceRemove", gid); err != nil {
+	if _, err := h.a.rpc(ctx, "aria2.forceRemove", gid); err != nil {
 		slog.Warn("aria2 forceRemove failed", "gid", gid, "err", err)
 	}
 }
@@ -289,7 +367,7 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		return dl.Result{ErrorTail: "aria2c RPC daemon is not running: " + err.Error()}
 	}
 	a.mu.Lock()
-	port, running := a.port, a.cmd != nil && a.alive()
+	running := a.cmd != nil && a.alive()
 	a.mu.Unlock()
 	if !running {
 		return dl.Result{ErrorTail: "aria2c RPC daemon is not running."}
@@ -299,10 +377,13 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 	isTorrentFile := (strings.HasPrefix(target, "torrent:") || strings.HasSuffix(target, ".torrent")) &&
 		!strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") &&
 		!strings.HasPrefix(target, "magnet:") && !strings.HasPrefix(target, "ftp://")
+	isMetalinkFile := (strings.HasPrefix(target, "metalink:") || strings.HasSuffix(target, ".metalink") || strings.HasSuffix(target, ".meta4")) &&
+		!strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") &&
+		!strings.HasPrefix(target, "magnet:") && !strings.HasPrefix(target, "ftp://")
 	isBT := isMagnet || isTorrentFile
 
 	rpcOpts := map[string]any{"dir": destDir}
-	if isBT {
+	if isBT && a.trackers != nil {
 		rpcOpts["bt-tracker"] = a.trackers.CSV()
 	}
 	for k, v := range opts {
@@ -317,13 +398,20 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		if rerr != nil {
 			return dl.Result{ErrorTail: fmt.Sprintf("torrent file not readable: %v", rerr)}
 		}
-		raw, err = a.call(ctx, port, "aria2.addTorrent", base64.StdEncoding.EncodeToString(b), []string{}, rpcOpts)
+		raw, err = a.rpc(ctx, "aria2.addTorrent", base64.StdEncoding.EncodeToString(b), []string{}, rpcOpts)
+	} else if isMetalinkFile {
+		p := strings.TrimPrefix(target, "metalink:")
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return dl.Result{ErrorTail: fmt.Sprintf("metalink file not readable: %v", rerr)}
+		}
+		raw, err = a.rpc(ctx, "aria2.addMetalink", base64.StdEncoding.EncodeToString(b), rpcOpts)
 	} else {
 		t := strings.TrimPrefix(target, "torrent:")
-		if isMagnet && strings.HasPrefix(t, "magnet:") {
+		if isMagnet && strings.HasPrefix(t, "magnet:") && a.trackers != nil {
 			t = a.trackers.AddToMagnet(t)
 		}
-		raw, err = a.call(ctx, port, "aria2.addUri", []string{t}, rpcOpts)
+		raw, err = a.rpc(ctx, "aria2.addUri", []string{t}, rpcOpts)
 	}
 	if err != nil {
 		return dl.Result{ErrorTail: "Failed to add download to daemon: " + err.Error()}
@@ -339,7 +427,7 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		h.mu.Lock()
 		g := h.gid
 		h.mu.Unlock()
-		_, _ = a.call(c, port, "aria2.removeDownloadResult", g)
+		_, _ = a.rpc(c, "aria2.removeDownloadResult", g)
 	}()
 
 	done := make(chan struct{})
@@ -367,13 +455,9 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 		h.mu.Lock()
 		cur := h.gid
 		h.mu.Unlock()
-		res, err := a.call(ctx, port, "aria2.tellStatus", cur)
+		st, err := a.TellStatus(ctx, cur)
 		if err != nil {
 			slog.Warn("aria2 tellStatus failed", "gid", cur, "err", err)
-			continue
-		}
-		var st status
-		if err := json.Unmarshal(res, &st); err != nil {
 			continue
 		}
 		if len(st.FollowedBy) > 0 {
@@ -391,8 +475,8 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 			return dl.Result{ErrorTail: "download removed"}
 		}
 
-		completed, total, speed := atoi64(st.CompletedLength), atoi64(st.TotalLength), atoi64(st.DownloadSpeed)
-		seeders, conns := int(atoi64(st.NumSeeders)), int(atoi64(st.Connections))
+		completed, total, speed := st.CompletedLength, st.TotalLength, st.DownloadSpeed
+		seeders, conns := st.NumSeeders, st.Connections
 		pct := 0.0
 		if total > 0 {
 			pct = float64(completed) * 100 / float64(total)
@@ -405,10 +489,7 @@ func (a *Aria2) Download(ctx context.Context, target, destDir string, opts map[s
 				return dl.Result{ErrorTail: "Torrent is dead (stuck at 0% with no active seeders/peers)."}
 			}
 		}
-		name := st.Bittorrent.Info.Name
-		if name == "" && len(st.Files) > 0 && st.Files[0].Path != "" {
-			name = filepath.Base(st.Files[0].Path)
-		}
+		name := st.Name
 		if onProgress != nil {
 			onProgress(Progress{Pct: pct, Completed: completed, Speed: speed, Seeders: seeders, Connection: conns, Name: name})
 		}

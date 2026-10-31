@@ -366,6 +366,10 @@ func (a *App) torrentFileTarget(ctx context.Context, f *dl.TGFile) (string, erro
 	if err != nil {
 		return "", err
 	}
+	low := strings.ToLower(f.Name)
+	if strings.HasSuffix(low, ".metalink") || strings.HasSuffix(low, ".meta4") {
+		return "metalink:" + p, nil
+	}
 	return "torrent:" + p, nil
 }
 
@@ -409,11 +413,60 @@ var ariaFlags = map[string]string{
 	"--max-tries": "max-tries", "--retry-wait": "retry-wait", "--header": "header",
 	"--ua": "user-agent", "--referer": "referer", "--proxy": "all-proxy",
 	"--checksum": "checksum", "--out": "out", "--speed": "max-download-limit",
+	"--select": "select-file", "--select-file": "select-file",
+	"--cookie":  "load-cookies-header",
+	"--timeout": "timeout", "--connect-timeout": "connect-timeout",
+	"--lowest-speed-limit": "lowest-speed-limit",
+	"--bt-stop-timeout":    "bt-stop-timeout",
+	"--http-user":          "http-user", "--http-passwd": "http-passwd",
+	"--ftp-user": "ftp-user", "--ftp-passwd": "ftp-passwd",
+	"--all-proxy": "all-proxy", "--all-proxy-user": "all-proxy-user", "--all-proxy-passwd": "all-proxy-passwd",
+	"--stream-piece-selector": "stream-piece-selector",
+	"--bt-prioritize-piece":   "bt-prioritize-piece",
+	"--check-certificate":     "check-certificate",
+}
+
+func isAriaOptBlocked(key string) bool {
+	low := strings.ToLower(strings.TrimSpace(key))
+	if low == "" {
+		return true
+	}
+	blockedExact := map[string]bool{
+		"dir": true, "input-file": true, "save-session": true,
+		"save-session-interval": true, "log": true, "log-level": true,
+		"console-log-level": true, "daemon": true, "enable-rpc": true,
+		"rpc-listen-all": true, "rpc-listen-port": true, "rpc-secret": true,
+		"certificate": true, "private-key": true, "ca-certificate": true,
+		"load-cookies": true, "save-cookies": true, "torrent-file": true,
+		"metalink-file": true, "dht-file-path": true, "dht-file-path6": true,
+	}
+	if blockedExact[low] {
+		return true
+	}
+	if strings.HasPrefix(low, "on-download-") || strings.HasPrefix(low, "on-bt-") ||
+		strings.HasPrefix(low, "rpc-") || strings.HasPrefix(low, "hook-") {
+		return true
+	}
+	return false
 }
 
 func parseAriaFlags(toks []string, defaultLimit string) (map[string]any, []string) {
 	opts := map[string]any{}
 	set := func(k, v string) {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if isAriaOptBlocked(k) {
+			return
+		}
+		if k == "load-cookies-header" {
+			k = "header"
+			v = "Cookie: " + v
+		} else if k == "out" {
+			v = filepath.Base(v)
+			if v == "." || v == "/" || v == "" {
+				return
+			}
+		}
 		switch cur := opts[k].(type) {
 		case nil:
 			if k == "header" {
@@ -439,7 +492,7 @@ func parseAriaFlags(toks []string, defaultLimit string) (map[string]any, []strin
 			}
 			if flag == "--opt" {
 				if kv := strings.SplitN(t[eq+1:], "=", 2); len(kv) == 2 {
-					set(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
+					set(kv[0], kv[1])
 				}
 				continue
 			}
@@ -455,7 +508,7 @@ func parseAriaFlags(toks []string, defaultLimit string) (map[string]any, []strin
 			if i+1 < len(toks) {
 				i++
 				if kv := strings.SplitN(toks[i], "=", 2); len(kv) == 2 {
-					set(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
+					set(kv[0], kv[1])
 				}
 			}
 			continue
@@ -479,16 +532,19 @@ func (a *App) cmdAria(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		}
 	}
 	if target == "" && m.ReplyToMessage != nil {
-		if r := m.ReplyToMessage; r.Document != nil && strings.HasSuffix(strings.ToLower(r.Document.FileName), ".torrent") {
-			if t, err := a.torrentFileTarget(ctx, mediaOf(r)); err == nil {
-				target = t
+		if r := m.ReplyToMessage; r.Document != nil {
+			name := strings.ToLower(r.Document.FileName)
+			if strings.HasSuffix(name, ".torrent") || strings.HasSuffix(name, ".metalink") || strings.HasSuffix(name, ".meta4") {
+				if t, err := a.torrentFileTarget(ctx, mediaOf(r)); err == nil {
+					target = t
+				}
 			}
-		} else if urls := urlsFromText(textOf(r)); len(urls) > 0 {
+		} else if urls := urlsFromText(textOf(m.ReplyToMessage)); len(urls) > 0 {
 			target = urls[0]
 		}
 	}
 	if target == "" {
-		a.reply(ctx, m, "Usage: <code>/aria &lt;url|magnet&gt; [-c N] [-s N] [--header 'K: V'] [--ua UA] [--referer URL] [--out NAME] [--opt key=value]</code>")
+		a.reply(ctx, m, "Usage: <code>/aria &lt;url|magnet&gt; [-c N] [-s N] [--select N] [--cookie 'K=V'] [--out NAME] [--speed N] [--opt key=value]</code>")
 		return
 	}
 	a.enqueue(ctx, m, target, dl.Args{Engine: "aria2", AriaOptions: opts})

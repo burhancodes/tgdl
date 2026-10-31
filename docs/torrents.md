@@ -28,6 +28,49 @@ Or reply to a `.torrent` file attachment in chat with `/tor`.
 
 ---
 
+## Aria2 Downloader (`/aria`)
+
+Download HTTP/HTTPS/FTP direct links, magnet links, torrents, or metalinks with granular multi-connection options.
+
+### Syntax
+```text
+/aria <url|magnet> [flags]
+```
+Or reply to a `.torrent`, `.metalink`, or `.meta4` file with `/aria`.
+
+### Flags & Options
+- `-c N`, `--connections N`: Max connections per server (default 16).
+- `-s N`, `--split N`: Number of splits/pieces to download simultaneously (default 16).
+- `--min-split-size SIZE`: Minimum segment split size (e.g. `1M`).
+- `--select N`, `--select-file N`: Select file indices to download from multi-file torrents/metalinks (e.g. `--select 1,3-5`).
+- `--cookie "K=V"`: Pass session cookies in HTTP request headers.
+- `--header "Header: Value"`: Custom HTTP header (can be repeated).
+- `--ua UA`: Custom User-Agent string.
+- `--referer URL`: Custom HTTP Referer.
+- `--out NAME`: Custom output file name (path-sanitized).
+- `--speed LIMIT`: Task download speed limit (e.g. `--speed 5M`).
+- `--proxy URL`: Proxy server URL (`http://`, `socks5://`).
+- `--timeout N`, `--connect-timeout N`: HTTP/FTP timeouts in seconds.
+- `--lowest-speed-limit LIMIT`: Drop connection if speed stays below limit (e.g. `10K`).
+- `--bt-stop-timeout N`: Stop BitTorrent download if idle for N seconds.
+- `--opt key=value`: Arbitrary safe aria2c option (dangerous host paths and hook scripts are blocked).
+
+### Examples
+- Accelerated multi-connection HTTP download:
+  ```text
+  /aria -c 16 -s 16 https://example.com/hugefile.iso
+  ```
+- Selective file download from a magnet link:
+  ```text
+  /aria --select 1,2 magnet:?xt=urn:btih:...
+  ```
+- Download with custom header, referer, and filename:
+  ```text
+  /aria --header "Authorization: Bearer xyz" --referer "https://example.com" --out "video.mp4" https://example.com/stream.mp4
+  ```
+
+---
+
 ## Torrent Search Engine (`/ts`, `/torsearch`, `/search`)
 
 Search for torrents across multiple providers directly within Telegram.

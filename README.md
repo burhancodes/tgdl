@@ -46,6 +46,12 @@ Send a name, that's it.
 
 The extension (`.mkv`, `.mp4` …) is kept automatically. See [docs/rename.md](docs/rename.md).
 
+## Torrents & aria2
+
+* `/tor <magnet | .torrent URL>` — download torrents or magnets headlessly (or reply to `.torrent`)
+* `/aria <url | magnet> [flags]` — multi-connection downloading (`-c 16 -s 16`, `--select`, `--cookie`, `--header`, `--out`, `--speed`)
+* `/ts [-p provider] [-t type] <query>` — search across 24 torrent indexers. See [docs/torrents.md](docs/torrents.md).
+
 ## Mirroring to Web Hosts
 
 Mirror files and links to GoFile, FileDitch, and Pixeldrain:

@@ -83,6 +83,7 @@ func TestNoComments(t *testing.T) {
 		"internal/tg/loadtest_test.go",
 		"internal/tg/tg.go",
 		"internal/torrent/aria2.go",
+		"internal/torrent/aria2_test.go",
 		"internal/torrent/magnetio.go",
 		"internal/torrent/magnetio_test.go",
 		"internal/torrent/trackers.go",

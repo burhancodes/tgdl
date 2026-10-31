@@ -239,3 +239,87 @@ func TestAuthMiddleware_BypassServiceMessagesAndBot(t *testing.T) {
 		t.Errorf("expected unauthorized user to be blocked by auth middleware")
 	}
 }
+
+func TestParseAriaFlags(t *testing.T) {
+	toks := []string{
+		"-c", "8",
+		"--split=4",
+		"--select=1,3-5",
+		"--cookie", "session=abcdef",
+		"--speed=5M",
+		"--out", "../../safe.mp4",
+		"--header", "X-Custom: 123",
+		"--opt", "bt-max-peers=80",
+		"--opt", "dir=/etc",
+		"--opt", "on-download-complete=/bin/sh",
+		"--opt=rpc-secret=stolen",
+		"https://example.com/file.zip",
+	}
+
+	opts, rest := parseAriaFlags(toks, "10M")
+	if len(rest) != 1 || rest[0] != "https://example.com/file.zip" {
+		t.Fatalf("unexpected rest: %v", rest)
+	}
+
+	if opts["max-connection-per-server"] != "8" {
+		t.Errorf("expected max-connection-per-server 8, got %v", opts["max-connection-per-server"])
+	}
+	if opts["split"] != "4" {
+		t.Errorf("expected split 4, got %v", opts["split"])
+	}
+	if opts["select-file"] != "1,3-5" {
+		t.Errorf("expected select-file 1,3-5, got %v", opts["select-file"])
+	}
+	if opts["max-download-limit"] != "5M" {
+		t.Errorf("expected max-download-limit 5M, got %v", opts["max-download-limit"])
+	}
+	if opts["out"] != "safe.mp4" {
+		t.Errorf("expected out sanitized to safe.mp4, got %v", opts["out"])
+	}
+	if opts["bt-max-peers"] != "80" {
+		t.Errorf("expected bt-max-peers 80, got %v", opts["bt-max-peers"])
+	}
+
+	headers, ok := opts["header"].([]string)
+	if !ok || len(headers) != 2 {
+		t.Fatalf("expected 2 headers, got %v", opts["header"])
+	}
+	if headers[0] != "Cookie: session=abcdef" || headers[1] != "X-Custom: 123" {
+		t.Errorf("unexpected headers: %v", headers)
+	}
+
+	for _, blocked := range []string{"dir", "on-download-complete", "rpc-secret"} {
+		if _, exists := opts[blocked]; exists {
+			t.Errorf("blocked key %s must not be present in opts", blocked)
+		}
+	}
+}
+
+func TestIsAriaOptBlocked(t *testing.T) {
+	cases := []struct {
+		key     string
+		blocked bool
+	}{
+		{"dir", true},
+		{"DIR", true},
+		{"input-file", true},
+		{"save-session", true},
+		{"on-download-complete", true},
+		{"on-download-start", true},
+		{"on-bt-download-complete", true},
+		{"rpc-secret", true},
+		{"rpc-listen-port", true},
+		{"certificate", true},
+		{"load-cookies", true},
+		{"max-download-limit", false},
+		{"split", false},
+		{"bt-max-peers", false},
+		{"stream-piece-selector", false},
+	}
+
+	for _, tc := range cases {
+		if got := isAriaOptBlocked(tc.key); got != tc.blocked {
+			t.Errorf("isAriaOptBlocked(%q) = %v, want %v", tc.key, got, tc.blocked)
+		}
+	}
+}
