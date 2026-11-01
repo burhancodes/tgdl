@@ -9,9 +9,6 @@ import (
 	"strings"
 	"time"
 
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
-
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
@@ -37,7 +34,7 @@ func (a *App) statusText(chatFilter int64) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (a *App) cmdStatus(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdStatus(ctx context.Context, u *Update) {
 	m := u.Message
 	filter := m.Chat.ID
 	if a.auth.IsOwner(userID(m)) {
@@ -49,7 +46,7 @@ func (a *App) cmdStatus(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	a.replyKB(ctx, m, a.statusText(filter), kb)
 }
 
-func (a *App) cbStatus(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbStatus(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	chatID, msgID, ok := cbMessage(q)
 	if !ok {
@@ -66,9 +63,9 @@ func (a *App) cbStatus(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	_ = a.tg.Edit(ctx, tg.MessageRef{ChatID: chatID, ID: msgID}, a.statusText(filter), tg.SendOpts{Keyboard: kb})
 }
 
-func cbMessage(q *models.CallbackQuery) (chatID int64, msgID int, ok bool) {
-	if q.Message.Message != nil {
-		return q.Message.Message.Chat.ID, q.Message.Message.ID, true
+func cbMessage(q *CallbackQuery) (chatID int64, msgID int, ok bool) {
+	if q != nil && q.Message != nil {
+		return q.Message.Chat.ID, q.Message.ID, true
 	}
 	return 0, 0, false
 }
@@ -83,7 +80,7 @@ func (a *App) cancelJob(ctx context.Context, j *store.Job) {
 	}
 }
 
-func (a *App) cmdCancel(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdCancel(ctx context.Context, u *Update) {
 	m := u.Message
 	if t := tokens(m); len(t) > 0 {
 		id := strings.TrimPrefix(t[0], "#")
@@ -125,8 +122,8 @@ func mask(k string) string {
 	return k[:4] + strings.Repeat("*", len(k)-4)
 }
 
-func (a *App) cmdKey(service, label string) tgbot.HandlerFunc {
-	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdKey(service, label string) HandlerFunc {
+	return func(ctx context.Context, u *Update) {
 		m := u.Message
 		uid := userID(m)
 		if uid <= 0 {
@@ -156,7 +153,7 @@ func (a *App) cmdKey(service, label string) tgbot.HandlerFunc {
 	}
 }
 
-func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdCookies(ctx context.Context, u *Update) {
 	m := u.Message
 	uid := userID(m)
 	if uid <= 0 {
@@ -181,7 +178,7 @@ func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 			return
 		}
 		defer os.RemoveAll(tmp)
-		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmp, nil)
+		p, err := a.tg.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmp, nil)
 		if err != nil {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))
 			return
@@ -217,11 +214,11 @@ func (a *App) cmdCookies(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		code(has(cookiePath))))
 }
 
-func (a *App) cmdGDLConf(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdGDLConf(ctx context.Context, u *Update) {
 	a.reply(ctx, u.Message, "config files are no longer supported; use /cookies")
 }
 
-func (a *App) cmdTorrentSearch(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdTorrentSearch(ctx context.Context, u *Update) {
 	m := u.Message
 	toks := tokens(m)
 	var providers []string

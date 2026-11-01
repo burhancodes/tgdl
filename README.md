@@ -68,11 +68,10 @@ All bot configurations, environment variables, and runtime limits can be viewed 
 
 For detailed information on configuration keys, precedence layers, live updates, encrypted secrets, and text commands, see [docs/settings.md](docs/settings.md).
 
-## Telegram transport (important)
+## Telegram transport (MTProto standalone)
 
-The Bot API cloud limits uploads to 50 MB. For files up to ~2 GB run a self-hosted
-`telegram-bot-api --local` server (included in `docker-compose.yml`) and set `TG_BOT_API_URL`.
-Without it the bot works but splits/skips anything above ~49 MB.
+tgdl communicates directly with Telegram servers over MTProto using `gotd/td`, bypassing the Bot API HTTP restrictions entirely.
+Files up to 2,000 MiB (2 GiB) are streamed directly from/to disk in bounded 512 KiB chunks without requiring a local `telegram-bot-api` sidecar container.
 
 ## Build & run
 
@@ -82,8 +81,7 @@ go vet ./... && go test ./...
 go build -o tgdl ./cmd/tgdl
 ```
 
-or `docker compose up -d --build`. Configuration keys are unchanged from the Python version
-(`.env.example`), plus `TG_BOT_API_URL`.
+or `docker compose up -d --build`. Required keys are `TG_API_ID`, `TG_API_HASH`, and `TG_BOT_TOKEN` (see `.env.example`).
 
 External tools used at runtime: `ffmpeg`, `aria2c`, `7z`/`unrar`/`unzip`, `gallery-dl`,
 `cyberdrop-dl`, `node` (torrent-search sidecar in `scraper/`).

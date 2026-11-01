@@ -102,12 +102,10 @@ Configure access control and security policies in `.env`:
 
 ---
 
-## Local Telegram Bot API & Zero-Copy Uploads (`.env`)
+## MTProto Standalone Transport
 
-When running a self-hosted `telegram-bot-api` server in `--local` mode (enabled by default in `docker-compose.yml`):
-- `TG_BOT_API_URL`: Points to the local server (e.g. `http://telegram-bot-api:8081`), lifting upload/download size limits up to 2000 MB.
-- `TG_BOT_API_DATA_DIR`: Base directory where the local Bot API stores downloaded files (default `/var/lib/telegram-bot-api`). Files are moved or copied and safely cleaned up from this volume upon successful download.
-- `TG_BOT_API_LOCAL_DIR_MAP`: Format `hostprefix=containerprefix` (e.g. `/app/data=/app/data`). When the Bot API server shares the downloads directory volume, the bot passes direct `file:///<path>` references to Telegram Bot API instead of transmitting file bytes over HTTP.
+tgdl connects directly to Telegram DCs using native MTProto (`gotd/td`).
+All file transfers (up to 2,000 MiB / 2 GiB) are streamed in fixed 512 KiB parts directly from/to disk with zero whole-file memory accumulation. No external Bot API container is required.
 
 ---
 

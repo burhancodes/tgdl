@@ -15,9 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
-
 	"github.com/burhanverse/tgdl/internal/settings"
 	"github.com/burhanverse/tgdl/internal/tg"
 )
@@ -130,20 +127,20 @@ func (ui *SettingsUI) getPendingImport(token string) (func(ctx context.Context, 
 	return fn, true
 }
 
-func (a *App) checkOwnerPrivate(fromID int64, chat *models.Chat) (bool, string) {
+func (a *App) checkOwnerPrivate(fromID int64, chat *Chat) (bool, string) {
 	if a.auth == nil || !a.auth.HasOwner() {
 		return false, "Settings commands are disabled because no owner is configured on this bot."
 	}
 	if !a.auth.IsOwner(fromID) {
 		return false, "You are not authorized to access bot settings."
 	}
-	if chat == nil || chat.Type != "private" {
+	if chat == nil || !chat.IsPrivate() {
 		return false, "Settings can only be accessed in a private chat with the bot."
 	}
 	return true, ""
 }
 
-func (a *App) cmdSettings(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdSettings(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -194,7 +191,7 @@ func (a *App) cmdSettings(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	_, _ = a.tg.Send(ctx, m.Chat.ID, text, tg.SendOpts{Keyboard: kb})
 }
 
-func (a *App) cmdSet(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdSet(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -264,7 +261,7 @@ func (a *App) cmdSet(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	))
 }
 
-func (a *App) cmdGet(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdGet(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -287,7 +284,7 @@ func (a *App) cmdGet(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	_, _ = a.tg.Send(ctx, m.Chat.ID, text, tg.SendOpts{Keyboard: kb})
 }
 
-func (a *App) cmdUnset(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdUnset(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -319,7 +316,7 @@ func (a *App) cmdUnset(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	))
 }
 
-func (a *App) cmdRestart(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdRestart(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -353,7 +350,7 @@ func (a *App) cmdRestart(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	}()
 }
 
-func (a *App) handleSettingsExport(ctx context.Context, m *models.Message) {
+func (a *App) handleSettingsExport(ctx context.Context, m *Message) {
 	data, err := a.settingsMgr.Export()
 	if err != nil {
 		a.reply(ctx, m, fmt.Sprintf("Export failed: %s", html.EscapeString(err.Error())))
@@ -379,7 +376,7 @@ func (a *App) handleSettingsExport(ctx context.Context, m *models.Message) {
 	}
 }
 
-func (a *App) handleSettingsImport(ctx context.Context, m *models.Message) {
+func (a *App) handleSettingsImport(ctx context.Context, m *Message) {
 	if m.ReplyToMessage == nil || m.ReplyToMessage.Document == nil {
 		a.reply(ctx, m, "Please reply to a settings JSON document with <code>/settings import</code> to import.")
 		return
@@ -448,7 +445,7 @@ func (a *App) handleSettingsImport(ctx context.Context, m *models.Message) {
 	_, _ = a.tg.Send(ctx, m.Chat.ID, sb.String(), tg.SendOpts{Keyboard: kb})
 }
 
-func (a *App) handleSettingsUndo(ctx context.Context, m *models.Message) {
+func (a *App) handleSettingsUndo(ctx context.Context, m *Message) {
 	last, err := a.settingsMgr.Undo(ctx, m.From.ID)
 	if err != nil {
 		a.reply(ctx, m, fmt.Sprintf("Undo failed: %s", html.EscapeString(err.Error())))
@@ -462,7 +459,7 @@ func (a *App) handleSettingsUndo(ctx context.Context, m *models.Message) {
 	))
 }
 
-func (a *App) cbSettings(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbSettings(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	if q == nil || q.From.ID == 0 {
 		return
@@ -472,9 +469,9 @@ func (a *App) cbSettings(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		return
 	}
 
-	var chat *models.Chat
-	if q.Message.Message != nil {
-		chat = &q.Message.Message.Chat
+	var chat *Chat
+	if q.Message != nil {
+		chat = &q.Message.Chat
 	}
 	if isOk, errMsg := a.checkOwnerPrivate(q.From.ID, chat); !isOk {
 		a.ack(ctx, q, errMsg, true)
@@ -636,8 +633,8 @@ func (a *App) cbSettings(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	}
 }
 
-func (a *App) handleSettingsInput(ctx context.Context, b *tgbot.Bot, m *models.Message) bool {
-	if a.settingsUI == nil || a.auth == nil || !a.auth.IsOwner(m.From.ID) || m.Chat.Type != "private" {
+func (a *App) handleSettingsInput(ctx context.Context, m *Message) bool {
+	if a.settingsUI == nil || a.auth == nil || !a.auth.IsOwner(m.From.ID) || !m.Chat.IsPrivate() {
 		return false
 	}
 

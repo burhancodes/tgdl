@@ -9,11 +9,9 @@ import (
 	"github.com/burhanverse/tgdl/internal/rename"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/tg"
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 )
 
-func (a *App) cmdRename(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cmdRename(ctx context.Context, u *Update) {
 	m := u.Message
 	if m == nil {
 		return
@@ -31,7 +29,7 @@ func (a *App) cmdRename(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	a.handleRenameSingle(ctx, m, toks)
 }
 
-func (a *App) handleRenameBatch(ctx context.Context, m *models.Message, toks []string) {
+func (a *App) handleRenameBatch(ctx context.Context, m *Message, toks []string) {
 	isDoc := parseBatchRenameToks(toks)
 	cardText := formatBatchCard(0, a.cfg.RenameMaxBatch)
 	kb := batchKeyboard()
@@ -43,7 +41,7 @@ func (a *App) handleRenameBatch(ctx context.Context, m *models.Message, toks []s
 	a.renameSessions.Start(m.Chat.ID, userID(m), isDoc, ref.ID)
 }
 
-func (a *App) handleRenameSingle(ctx context.Context, m *models.Message, toks []string) {
+func (a *App) handleRenameSingle(ctx context.Context, m *Message, toks []string) {
 	_, file := mediaSource(m)
 	if file == nil {
 		a.reply(ctx, m, renameUsage())
@@ -72,7 +70,7 @@ func (a *App) handleRenameSingle(ctx context.Context, m *models.Message, toks []
 	a.enqueue(ctx, m, target, args)
 }
 
-func (a *App) handlePendingSingleName(ctx context.Context, m *models.Message, pending *PendingSingleRename) {
+func (a *App) handlePendingSingleName(ctx context.Context, m *Message, pending *PendingSingleRename) {
 	typed := m.Text
 	finalName, _, err := rename.Name(typed, pending.File.Name)
 	if err != nil {
@@ -88,7 +86,7 @@ func (a *App) handlePendingSingleName(ctx context.Context, m *models.Message, pe
 	a.enqueue(ctx, m, target, args)
 }
 
-func (a *App) handleBatchNamesMessage(ctx context.Context, m *models.Message, sess *RenameSession) {
+func (a *App) handleBatchNamesMessage(ctx context.Context, m *Message, sess *RenameSession) {
 	raw := strings.ReplaceAll(m.Text, "\r\n", "\n")
 	raw = strings.Trim(raw, "\r\n")
 	if strings.TrimSpace(raw) == "" {
@@ -145,12 +143,12 @@ func (a *App) handleBatchNamesMessage(ctx context.Context, m *models.Message, se
 	}
 }
 
-func (a *App) cbRename(ctx context.Context, b *tgbot.Bot, u *models.Update) {
+func (a *App) cbRename(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
-	if q == nil || q.Message.Message == nil {
+	if q == nil || q.Message == nil {
 		return
 	}
-	msg := q.Message.Message
+	msg := q.Message
 	chatID := msg.Chat.ID
 	fromID := q.From.ID
 
@@ -181,7 +179,7 @@ func (a *App) cbRename(ctx context.Context, b *tgbot.Bot, u *models.Update) {
 	}
 }
 
-func (a *App) cbRenamePreview(ctx context.Context, q *models.CallbackQuery, sess *RenameSession) {
+func (a *App) cbRenamePreview(ctx context.Context, q *CallbackQuery, sess *RenameSession) {
 	if len(sess.Files) == 0 {
 		_ = a.tg.Answer(ctx, q.ID, "No files in batch yet. Send media to add.", true)
 		return
@@ -221,7 +219,7 @@ func (a *App) cbRenamePreview(ctx context.Context, q *models.CallbackQuery, sess
 	}
 }
 
-func (a *App) cbRenameApply(ctx context.Context, q *models.CallbackQuery, msg *models.Message, sess *RenameSession) {
+func (a *App) cbRenameApply(ctx context.Context, q *CallbackQuery, msg *Message, sess *RenameSession) {
 	if len(sess.Files) == 0 {
 		_ = a.tg.Answer(ctx, q.ID, "No files in batch to rename.", true)
 		return

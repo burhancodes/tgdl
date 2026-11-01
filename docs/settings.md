@@ -38,7 +38,7 @@ Every configuration setting belongs to one of three application categories:
   - Indicated in the bot UI with a `[restart required]` badge.
   - The owner can issue `/restart` for a clean shutdown (exit code 0); Docker's `restart: unless-stopped` policy restarts the container.
 - **Read-Only**: Critical bootstrapping variables that cannot be altered within the bot:
-  - `OWNER_ID`, `TG_BOT_TOKEN`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_API_URL`, `TG_BOT_API_DATA_DIR`, `TG_BOT_API_LOCAL_DIR_MAP`, `DATA_DIR`, `AUTH_DIR`, `LOG_DIR`, and `GDRIVE_*`.
+  - `OWNER_ID`, `TG_BOT_TOKEN`, `TG_API_ID`, `TG_API_HASH`, `DATA_DIR`, `AUTH_DIR`, `LOG_DIR`, and `GDRIVE_*`.
   - Displayed in the bot for inspection with a `[read-only]` badge, but can only be changed via the host environment or `.env` file.
 
 ---
@@ -104,9 +104,6 @@ Settings commands and callbacks are strictly restricted to the bot owner (`OWNER
 | `TG_API_ID` | `int` | `0` | Read-Only | Telegram API ID from my.telegram.org |
 | `TG_API_HASH` | `secret` | `*(empty)*` | Read-Only | Telegram API hash from my.telegram.org |
 | `TG_BOT_TOKEN` | `secret` | `*(empty)*` | Read-Only | Telegram Bot API token from BotFather |
-| `TG_BOT_API_URL` | `string` | `*(empty)*` | Read-Only | Custom Telegram Bot API server endpoint |
-| `TG_BOT_API_DATA_DIR` | `path` | `/var/lib/telegram-bot-api` | Read-Only | Shared data dir used by self-hosted Bot API server |
-| `TG_BOT_API_LOCAL_DIR_MAP` | `string` | `*(empty)*` | Read-Only | Host-to-container dir map (hostprefix=containerprefix) |
 | `TG_ALBUM_MAX_BYTES` | `size` | `64M` | Live | Max total bytes per Telegram media album batch |
 | `PIN_STATUS_MESSAGE` | `bool` | `true` | Live | Pin active job status card in chat |
 | `TG_UPLOAD_DELAY_MIN` | `duration` | `3s` | Live | Minimum randomized delay between Telegram uploads |

@@ -19,12 +19,6 @@ type Config struct {
 	APIHash  string
 	BotToken string
 
-	BotAPIURL string
-
-	BotAPILocalDirMap    string
-	LocalHostPrefix      string
-	LocalContainerPrefix string
-
 	PixeldrainAPIKey string
 	PixeldrainDomain string
 	GofileAPIKey     string
@@ -81,8 +75,6 @@ type Config struct {
 	MaxExtractFiles  int
 	MinFreeDiskBytes int64
 
-	BotAPIDataDir string
-
 	MemoryLimitMB int64
 
 	TorrentTimeout           time.Duration
@@ -121,11 +113,9 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	c := &Config{
-		APIID:             envInt("TG_API_ID", 0),
-		APIHash:           envStr("TG_API_HASH", ""),
-		BotToken:          envStr("TG_BOT_TOKEN", ""),
-		BotAPIURL:         envStr("TG_BOT_API_URL", ""),
-		BotAPILocalDirMap: envStr("TG_BOT_API_LOCAL_DIR_MAP", ""),
+		APIID:    envInt("TG_API_ID", 0),
+		APIHash:  envStr("TG_API_HASH", ""),
+		BotToken: envStr("TG_BOT_TOKEN", ""),
 
 		PixeldrainAPIKey: envStr("PIXELDRAIN_API_KEY", ""),
 		PixeldrainDomain: pixeldrainDomain(envStr("PIXELDRAIN_DOMAIN", "pixeldrain.com")),
@@ -183,7 +173,6 @@ func Load() (*Config, error) {
 		MaxExtractFiles:  envInt("MAX_EXTRACT_FILES", 200000),
 		MinFreeDiskBytes: envInt64("MIN_FREE_DISK_BYTES", 2*1024*1024*1024),
 
-		BotAPIDataDir: envStr("TG_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api"),
 		MemoryLimitMB: envInt64("TGDL_MEMORY_LIMIT_MB", 0),
 
 		TorrentTimeout:           envSeconds("TORRENT_TIMEOUT", 120),
@@ -208,15 +197,6 @@ func Load() (*Config, error) {
 		SettingsWriteEnv:      envBool("SETTINGS_WRITE_ENV", false),
 		SettingsEncryptionKey: envStr("SETTINGS_ENCRYPTION_KEY", ""),
 		LogLevelVar:           &slog.LevelVar{},
-	}
-
-	if c.BotAPILocalDirMap != "" {
-		h, cont, ok := ParseLocalDirMap(c.BotAPILocalDirMap)
-		if !ok {
-			return nil, fmt.Errorf("invalid TG_BOT_API_LOCAL_DIR_MAP %q: expected hostprefix=containerprefix", c.BotAPILocalDirMap)
-		}
-		c.LocalHostPrefix = h
-		c.LocalContainerPrefix = cont
 	}
 
 	c.AuthorizedIDs = parseIDList(os.Getenv("AUTHORIZED_USER_IDS"))
@@ -264,32 +244,8 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
-func ParseLocalDirMap(raw string) (string, string, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", "", false
-	}
-	parts := strings.SplitN(raw, "=", 2)
-	if len(parts) != 2 {
-		return "", "", false
-	}
-	hp := strings.TrimSpace(parts[0])
-	cp := strings.TrimSpace(parts[1])
-	if hp == "" || cp == "" {
-		return "", "", false
-	}
-	return hp, cp, true
-}
-
-func (c *Config) LocalDirMap() (hostPrefix, containerPrefix string, ok bool) {
-	return ParseLocalDirMap(c.BotAPILocalDirMap)
-}
-
 func (c *Config) UploadLimit() int64 {
-	if c.BotAPIURL != "" {
-		return 195 * 1024 * 1024 * 1024 / 100
-	}
-	return 49 * 1024 * 1024
+	return 2000 * 1024 * 1024
 }
 
 func (c *Config) Validate() error {

@@ -2,8 +2,6 @@ package bot
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +13,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/upload"
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 )
 
 type mockMirrorTG struct {
@@ -27,6 +23,16 @@ type mockMirrorTG struct {
 func (m *mockMirrorTG) Send(_ context.Context, chatID int64, html string, o tg.SendOpts) (tg.MessageRef, error) {
 	m.sends = append(m.sends, html)
 	return tg.MessageRef{ChatID: chatID, ID: 100}, nil
+}
+
+func (m *mockMirrorTG) Download(_ context.Context, f tg.FileRef, dir string, _ tg.ProgressFunc) (string, error) {
+	dest := filepath.Join(dir, f.Name)
+	if f.FileID == "txt1" {
+		if err := os.WriteFile(dest, []byte("https://example.com/url1.mp4\nhttps://example.com/url2.mp4\n"), 0o600); err != nil {
+			return "", err
+		}
+	}
+	return dest, nil
 }
 
 func setupMirrorTestApp(t *testing.T) (*App, *mockMirrorTG, *store.Store) {
@@ -61,17 +67,17 @@ func setupMirrorTestApp(t *testing.T) (*App, *mockMirrorTG, *store.Store) {
 	return app, mockTG, st
 }
 
-func makeMsgUpdate(text string, reply *models.Message, doc *models.Document, video *models.Video) *models.Update {
-	msg := &models.Message{
+func makeMsgUpdate(text string, reply *Message, doc *Document, video *Video) *Update {
+	msg := &Message{
 		ID:             1,
-		Chat:           models.Chat{ID: 100},
-		From:           &models.User{ID: 100},
+		Chat:           Chat{ID: 100},
+		From:           &User{ID: 100},
 		Text:           text,
 		ReplyToMessage: reply,
 		Document:       doc,
 		Video:          video,
 	}
-	return &models.Update{Message: msg}
+	return &Update{Message: msg}
 }
 
 func TestMirrorCommand_Selection(t *testing.T) {
@@ -80,7 +86,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_All", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/m https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo(nil)(ctx, nil, u)
+		app.cmdMirrorTo(nil)(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {
@@ -101,7 +107,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_GoFile", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/gofile https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, nil, u)
+		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {
@@ -116,7 +122,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_Pixeldrain", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/pd https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo([]upload.HostID{upload.Pixeldrain})(ctx, nil, u)
+		app.cmdMirrorTo([]upload.HostID{upload.Pixeldrain})(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {
@@ -131,7 +137,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_To_Specific", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/m -to gofile,pd https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo(nil)(ctx, nil, u)
+		app.cmdMirrorTo(nil)(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {
@@ -146,7 +152,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_To_Unknown", func(t *testing.T) {
 		app, mockTG, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/m -to unknown https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo(nil)(ctx, nil, u)
+		app.cmdMirrorTo(nil)(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 0 {
@@ -160,7 +166,7 @@ func TestMirrorCommand_Selection(t *testing.T) {
 	t.Run("Mirror_To_RejectedOnSpecific", func(t *testing.T) {
 		app, mockTG, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/gofile -to pd https://example.com/test.mp4", nil, nil, nil)
-		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, nil, u)
+		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 0 {
@@ -180,7 +186,7 @@ func TestMirrorCommand_MultipleURLs(t *testing.T) {
 	ctx := context.Background()
 	app, _, st := setupMirrorTestApp(t)
 	u := makeMsgUpdate("/m https://example.com/1.mp4 https://example.com/2.mp4", nil, nil, nil)
-	app.cmdMirrorTo(nil)(ctx, nil, u)
+	app.cmdMirrorTo(nil)(ctx, u)
 
 	jobs, err := st.ActiveJobsForChat(ctx, 100)
 	if err != nil || len(jobs) != 1 {
@@ -194,47 +200,19 @@ func TestMirrorCommand_MultipleURLs(t *testing.T) {
 
 func TestMirrorCommand_RepliedTextFile(t *testing.T) {
 	ctx := context.Background()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "getMe") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":12345,"is_bot":true,"first_name":"test"}}`))
-			return
-		}
-		if strings.Contains(r.URL.Path, "getFile") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_id":"txt1","file_path":"test.txt"}}`))
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "test.txt") {
-			_, _ = w.Write([]byte("https://example.com/url1.mp4\nhttps://example.com/url2.mp4\n"))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	b, err := tgbot.New("12345:TESTTOKEN", tgbot.WithServerURL(srv.URL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	api := tg.NewBotAPI(b, "12345:TESTTOKEN")
-	api.BaseURL = srv.URL
-
 	app, _, st := setupMirrorTestApp(t)
-	app.api = api
 
 	content := "https://example.com/url1.mp4\nhttps://example.com/url2.mp4\n"
-	reply := &models.Message{
+	reply := &Message{
 		ID: 50,
-		Document: &models.Document{
+		Document: &Document{
 			FileID:   "txt1",
 			FileName: "links.txt",
 			FileSize: int64(len(content)),
 		},
 	}
 	u := makeMsgUpdate("/m", reply, nil, nil)
-	app.cmdMirrorTo(nil)(ctx, nil, u)
+	app.cmdMirrorTo(nil)(ctx, u)
 
 	jobs, err := st.ActiveJobsForChat(ctx, 100)
 	if err != nil || len(jobs) != 1 {
@@ -250,16 +228,16 @@ func TestMirrorCommand_TelegramFileInput(t *testing.T) {
 	ctx := context.Background()
 	app, _, st := setupMirrorTestApp(t)
 
-	reply := &models.Message{
+	reply := &Message{
 		ID: 50,
-		Video: &models.Video{
+		Video: &Video{
 			FileID:   "video123",
 			FileName: "myvideo.mp4",
 			FileSize: 1024,
 		},
 	}
 	u := makeMsgUpdate("/m", reply, nil, nil)
-	app.cmdMirrorTo(nil)(ctx, nil, u)
+	app.cmdMirrorTo(nil)(ctx, u)
 
 	jobs, err := st.ActiveJobsForChat(ctx, 100)
 	if err != nil || len(jobs) != 1 {
@@ -280,7 +258,7 @@ func TestMirrorCommand_GofileDownloader(t *testing.T) {
 	t.Run("Gofile_Download", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/gofile https://gofile.io/d/abc123", nil, nil, nil)
-		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, nil, u)
+		app.cmdMirrorTo([]upload.HostID{upload.GoFile})(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {
@@ -298,7 +276,7 @@ func TestMirrorCommand_GofileDownloader(t *testing.T) {
 	t.Run("Gfdl_Download", func(t *testing.T) {
 		app, _, st := setupMirrorTestApp(t)
 		u := makeMsgUpdate("/gfdl https://gofile.io/d/def456", nil, nil, nil)
-		app.cmdGofileDL(ctx, nil, u)
+		app.cmdGofileDL(ctx, u)
 
 		jobs, err := st.ActiveJobsForChat(ctx, 100)
 		if err != nil || len(jobs) != 1 {

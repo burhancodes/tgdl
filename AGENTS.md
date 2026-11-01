@@ -5,7 +5,7 @@ This file is the standing contract for **every AI agent and every contributor** 
 prompt contradicts a rule marked **MUST** or **NEVER**, stop and ask instead of breaking the rule.
 
 Project: `github.com/burhanverse/tgdl`, a Go Telegram downloader/uploader bot, with a Node scraper sidecar
-(torrent search) and a self-hosted `telegram-bot-api` server, deployed with Docker Compose.
+(torrent search), communicating directly via native MTProto (`gotd/td`) with 2 GiB limit support, deployed with Docker Compose.
 
 If a symlink or copy is needed for your tool: `CLAUDE.md`, `.cursorrules` and `.github/copilot-instructions.md` should only
 point to this file. **This file is the single source of truth.**
@@ -40,9 +40,8 @@ prevent that from ever coming back.
    (JSON/RPC responses, cookie files, config, keys), which MUST use `io.LimitReader` or a documented hard cap
    (default 1-4 MiB) and MUST be listed in the allowlist in `internal/memguard_test.go`, keyed by full path, with the
    reason given in the PR description (not as a code comment).
-2. **NEVER buffer a multipart upload.** Use the streaming upload path in `internal/tg/botapi.go` (`postMultipart`,
-   exact `Content-Length`, no whole-body buffer). Do not use the go-telegram/bot library's built-in upload helpers for
-   files: that library buffers the whole body in memory.
+2. **NEVER buffer uploads or downloads into memory.** Use chunked streaming (512 KiB parts) via MTProto (`gotd/td`)
+   directly from and to disk with fixed-size buffers. No whole-body buffer or memory accumulation.
 3. **Child process output MUST be bounded.** Use `archive.TailWriter` (or an equivalent ring buffer) for stdout/stderr
    of 7z, unrar, ffmpeg, ffprobe, aria2, yt-dlp, gallery-dl, cyberdrop-dl. Never `cmd.Output()` or `CombinedOutput()` on a
    tool that can print a lot. Always drain stdout/stderr, or the child blocks forever.
@@ -71,7 +70,7 @@ prevent that from ever coming back.
 
 ## 2. Telegram rules
 
-1. Respect the limits: cloud Bot API 50 MB up / 20 MB down; local server 2 GB. Albums are 2-10 items and bounded by
+1. Respect the limits: MTProto bot limit is 2,000 MiB (2 GiB) up and down. Albums are 2-10 items and bounded by
    `TG_ALBUM_MAX_BYTES`. Captions are at most 1024 chars, messages 4096 (HTML formatting counts).
 2. **Never retry an upload once the body was fully sent** (`ErrAmbiguousUpload`). It may already have arrived, and a retry
    makes duplicates. Retry only on connect errors, 429 (honour `retry_after`) and clearly failed requests.
@@ -79,9 +78,7 @@ prevent that from ever coming back.
 4. Rate limits: all sends go through the existing limiter (`lim.Acquire` / `AcquireUpload`). Edit status cards at most
    once per ~2 s per message. Do not add a message per file in batch flows, edit one card instead.
 5. Handle `FLOOD_WAIT`, `message is not modified`, `message to edit not found` and "bot was blocked" without failing the job.
-6. `file://` mode (shared Bot API volume) requires files readable by the Bot API container: mode 0644 files, 0755
-   dirs, same volume mapping. Anything small (thumbnails) is attached with multipart, never by path. A `file://` failure must
-   fall back to streaming once.
+6. Direct MTProto communication streams files chunk-by-chunk from/to the filesystem; no external bot API container or volume mapping required.
 7. Do not log or echo tokens, API hashes, cookies, keys or full user-supplied URLs with credentials.
 
 ---

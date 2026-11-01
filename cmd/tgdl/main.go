@@ -16,10 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-telegram/bot/models"
-
-	tgbot "github.com/go-telegram/bot"
-
 	"github.com/burhanverse/tgdl/internal/auth"
 	"github.com/burhanverse/tgdl/internal/bot"
 	"github.com/burhanverse/tgdl/internal/config"
@@ -76,35 +72,13 @@ func run() error {
 	authz := auth.New(cfg)
 	authz.WarnIfUnrestricted()
 
-	var (
-		app *bot.App
-		b   *tgbot.Bot
-		api *tg.BotAPI
-	)
-	for attempt := 1; attempt <= 10; attempt++ {
-		b, api, err = bot.NewClient(cfg, authz, func(ctx context.Context, b *tgbot.Bot, u *models.Update) {
-			if app != nil {
-				app.Default(ctx, b, u)
-			}
-		})
-		if err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if attempt == 10 {
-			return fmt.Errorf("create telegram client: %w", err)
-		}
-		slog.Warn("telegram client initialization failed, retrying...", "attempt", attempt, "err", err)
-		timer := time.NewTimer(2 * time.Second)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+	mtConfig := tg.MTProtoConfig{
+		APIID:    cfg.APIID,
+		APIHash:  cfg.APIHash,
+		BotToken: cfg.BotToken,
+		DataDir:  cfg.DataDir,
 	}
+	client := tg.NewMTProto(mtConfig, st.DB())
 
 	keys := upload.NewKeys(cfg)
 	hosts := upload.NewHosts(cfg, keys)
@@ -115,7 +89,7 @@ func run() error {
 	runner := dl.NewRunner(cfg, keys)
 
 	deps := &jobs.Deps{
-		Cfg: cfg, Store: st, TG: tg.Client(api), Keys: keys, Hosts: hosts, Runner: runner,
+		Cfg: cfg, Store: st, TG: client, Keys: keys, Hosts: hosts, Runner: runner,
 		Aria: aria,
 	}
 	mgr := jobs.NewManager(deps, lim)
@@ -128,17 +102,19 @@ func run() error {
 		registerLiveSettingsHooks(setMgr, cfg, mgr, aria)
 	}
 
-	app = bot.New(bot.Deps{Cfg: cfg, Auth: authz, Store: st, Mgr: mgr, Keys: keys, Hosts: hosts,
-		Search: search, Lim: lim, Runner: runner, SettingsMgr: setMgr}, b, api)
-
-	if err := api.SetCommands(ctx, commands()); err != nil {
-		slog.Warn("could not set bot commands", "err", err)
-	}
-	if cfg.HasOwner && cfg.OwnerID != 0 {
-		if err := api.SetChatCommands(ctx, cfg.OwnerID, ownerCommands()); err != nil {
-			slog.Debug("could not set owner bot commands", "err", err)
-		}
-	}
+	app := bot.New(bot.Deps{
+		Cfg:         cfg,
+		Auth:        authz,
+		Store:       st,
+		Mgr:         mgr,
+		Keys:        keys,
+		Hosts:       hosts,
+		Search:      search,
+		Lim:         lim,
+		Runner:      runner,
+		SettingsMgr: setMgr,
+	}, client)
+	app.RegisterWithMTProto(client)
 
 	go search.Start(ctx)
 	go func() {
@@ -150,10 +126,35 @@ func run() error {
 	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("start job manager: %w", err)
 	}
+
+	go func() {
+		select {
+		case <-client.Ready():
+		case <-ctx.Done():
+			return
+		}
+		for attempt := 1; attempt <= 10; attempt++ {
+			if err := client.SetCommands(ctx, commands()); err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+		if cfg.HasOwner && cfg.OwnerID != 0 {
+			_ = client.SetChatCommands(ctx, cfg.OwnerID, ownerCommands())
+		}
+	}()
+
 	slog.Info("bot is active and listening for messages")
-	b.Start(ctx)
+	if err := client.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("mtproto client: %w", err)
+	}
 
 	slog.Info("shutting down")
+	app.Stop()
 	mgr.Stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

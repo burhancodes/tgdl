@@ -45,7 +45,7 @@ func TestTouchedFilesHaveNoComments(t *testing.T) {
 		"internal/jobs/tgupload.go",
 		"internal/logging/logging.go",
 		"internal/media/media.go",
-		"internal/tg/botapi.go",
+		"internal/tg/mtproto.go",
 		"internal/tg/tg.go",
 		"internal/torrent/aria2.go",
 		"internal/bot/cmd_rename.go",
@@ -56,7 +56,6 @@ func TestTouchedFilesHaveNoComments(t *testing.T) {
 		"internal/jobs/rename_test.go",
 		"internal/rename/rename.go",
 		"internal/rename/rename_test.go",
-		"internal/tg/botapi_download_test.go",
 	}
 
 	settingsDir := filepath.Join(root, "internal", "settings")

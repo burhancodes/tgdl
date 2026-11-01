@@ -50,7 +50,6 @@ pip install --break-system-packages gallery-dl cyberdrop-dl-patched
    - `TG_API_ID`: Telegram API ID obtained from [my.telegram.org](https://my.telegram.org).
    - `TG_API_HASH`: Telegram API Hash.
    - `TG_BOT_TOKEN`: Bot token from [@BotFather](https://t.me/BotFather).
-   - `TG_BOT_API_URL`: URL of a local `telegram-bot-api` server if transfers > 50 MB are needed.
 
 4. **Build and Run**:
    Compile the Go binary and start the bot:
@@ -69,7 +68,7 @@ pip install --break-system-packages gallery-dl cyberdrop-dl-patched
 
 ## Docker Deployment (Recommended)
 
-Docker Compose runs a local `telegram-bot-api` server together with the Go `tgdl` bot container, removing the 50 MB Telegram cloud upload limit (supporting up to 2000 MB).
+Docker Compose runs `tgdl` with native MTProto support, communicating directly with Telegram and supporting up to 2000 MB (2 GiB) transfers without requiring a separate Bot API container.
 
 ### Launching with Docker Compose
 ```bash
@@ -92,7 +91,7 @@ docker compose logs -f
 ```
 
 ### Container Permissions & Host Ownership
-`tgdl` runs as root inside its container with dropped capabilities (`cap_drop: [ALL]`, `cap_add: [DAC_OVERRIDE, FOWNER, CHOWN]`, `no-new-privileges:true`). This is necessary because the local `telegram-bot-api` server writes downloaded files into its private data directory (`/var/lib/telegram-bot-api/<token>`) with restricted permissions (`0750` / `0640`, uid 101). Running with `DAC_OVERRIDE` allows `tgdl` to read and delete those files across volumes without requiring fragile host uid/gid mapping.
+`tgdl` runs with dropped capabilities (`cap_drop: [ALL]`, `no-new-privileges:true`). Files are stored and managed directly within the mounted directories (`./data`, `./auth`, `./logs`).
 
 **Host side effect:** Files created by the bot inside `./data`, `./auth`, and `./logs` will be owned by root on the host. If you need to edit or inspect these files by hand on the host, adjust ownership using:
 ```bash

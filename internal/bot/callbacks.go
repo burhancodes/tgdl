@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
-
 	"github.com/burhanverse/tgdl/internal/jobs"
 	"github.com/burhanverse/tgdl/internal/status"
 	"github.com/burhanverse/tgdl/internal/tg"
 )
 
-func (a *App) cbCancel(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbCancel(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	chatID, msgID, ok := cbMessage(q)
 	if !ok {
@@ -39,8 +36,7 @@ func (a *App) cbCancel(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		fmt.Sprintf("<b>Job #%s Cancelled</b>\n<blockquote>Cancelled by user.</blockquote>", esc(j.ID)), tg.SendOpts{})
 }
 
-// data format: archive_only:<job>:<id> | archive_ext:<job>:<id>
-func (a *App) cbArchive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbArchive(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	chatID, msgID, ok := cbMessage(q)
 	if !ok {
@@ -72,8 +68,7 @@ func (a *App) cbArchive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	_ = a.tg.Edit(ctx, tg.MessageRef{ChatID: chatID, ID: msgID}, status.ArchiveChoice(jobID, name, label), tg.SendOpts{})
 }
 
-// data format: convert_mp3:<job>:<id> | convert_orig:<job>:<id>
-func (a *App) cbConvert(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbConvert(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	chatID, msgID, ok := cbMessage(q)
 	if !ok {
@@ -102,7 +97,7 @@ func (a *App) cbConvert(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	_ = a.tg.Edit(ctx, tg.MessageRef{ChatID: chatID, ID: msgID}, status.ConversionChoice(jobID, name, label), tg.SendOpts{})
 }
 
-func (a *App) cbHelp(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cbHelp(ctx context.Context, u *Update) {
 	q := u.CallbackQuery
 	chatID, msgID, ok := cbMessage(q)
 	if !ok {

@@ -53,7 +53,7 @@ func GenerateDocs(reg *Registry) string {
 	sb.WriteString("  - Indicated in the bot UI with a `[restart required]` badge.\n")
 	sb.WriteString("  - The owner can issue `/restart` for a clean shutdown (exit code 0); Docker's `restart: unless-stopped` policy restarts the container.\n")
 	sb.WriteString("- **Read-Only**: Critical bootstrapping variables that cannot be altered within the bot:\n")
-	sb.WriteString("  - `OWNER_ID`, `TG_BOT_TOKEN`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_API_URL`, `TG_BOT_API_DATA_DIR`, `TG_BOT_API_LOCAL_DIR_MAP`, `DATA_DIR`, `AUTH_DIR`, `LOG_DIR`, and `GDRIVE_*`.\n")
+	sb.WriteString("  - `OWNER_ID`, `TG_BOT_TOKEN`, `TG_API_ID`, `TG_API_HASH`, `DATA_DIR`, `AUTH_DIR`, `LOG_DIR`, and `GDRIVE_*`.\n")
 	sb.WriteString("  - Displayed in the bot for inspection with a `[read-only]` badge, but can only be changed via the host environment or `.env` file.\n\n")
 	sb.WriteString("---\n\n")
 

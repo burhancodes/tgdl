@@ -14,16 +14,13 @@ import (
 	"strings"
 	"time"
 
-	tgbot "github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
-
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/pacing"
 	"github.com/burhanverse/tgdl/internal/tg"
 	"github.com/burhanverse/tgdl/internal/upload"
 )
 
-func (a *App) cmdHelp(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdHelp(ctx context.Context, u *Update) {
 	text, kb := helpPage("main")
 	if _, err := a.tg.Send(ctx, u.Message.Chat.ID, text, tg.SendOpts{Keyboard: kb, ReplyTo: u.Message.ID}); err != nil {
 		slog.Warn("send help failed", "err", err)
@@ -46,7 +43,7 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dir, nil)
+	p, err := a.tg.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dir, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +71,7 @@ func (a *App) urlsFromTextFile(ctx context.Context, f *dl.TGFile) ([]string, err
 	return out, sc.Err()
 }
 
-func (a *App) collectURLs(ctx context.Context, m *models.Message, fromTokens []string) []string {
+func (a *App) collectURLs(ctx context.Context, m *Message, fromTokens []string) []string {
 	urls := append([]string(nil), fromTokens...)
 	if len(urls) > 0 || m.ReplyToMessage == nil {
 		return urls
@@ -90,8 +87,8 @@ func (a *App) collectURLs(ctx context.Context, m *models.Message, fromTokens []s
 	return urlsFromText(textOf(r))
 }
 
-func (a *App) cmdMirrorTo(hosts []upload.HostID) tgbot.HandlerFunc {
-	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdMirrorTo(hosts []upload.HostID) HandlerFunc {
+	return func(ctx context.Context, u *Update) {
 		m := u.Message
 		f := parseFlags(tokens(m))
 		if len(hosts) > 0 && f.ToHosts != "" {
@@ -116,7 +113,7 @@ func (a *App) cmdMirrorTo(hosts []upload.HostID) tgbot.HandlerFunc {
 				}
 			}
 			if hasGofile {
-				a.cmdGofileDL(ctx, nil, u)
+				a.cmdGofileDL(ctx, u)
 				return
 			}
 		}
@@ -161,7 +158,7 @@ func (a *App) cmdMirrorTo(hosts []upload.HostID) tgbot.HandlerFunc {
 	}
 }
 
-func (a *App) cmdDirect(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdDirect(ctx context.Context, u *Update) {
 	m := u.Message
 	f := parseFlags(tokens(m))
 	urls := a.collectURLs(ctx, m, f.URLs)
@@ -173,8 +170,8 @@ func (a *App) cmdDirect(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		Unzip: f.Unzip, Password: f.Password})
 }
 
-func (a *App) cmdEngine(engine, name string) tgbot.HandlerFunc {
-	return func(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdEngine(engine, name string) HandlerFunc {
+	return func(ctx context.Context, u *Update) {
 		m := u.Message
 		f := parseFlags(tokens(m))
 		urls := a.collectURLs(ctx, m, f.URLs)
@@ -187,7 +184,7 @@ func (a *App) cmdEngine(engine, name string) tgbot.HandlerFunc {
 	}
 }
 
-func (a *App) cmdGofileDL(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdGofileDL(ctx context.Context, u *Update) {
 	m := u.Message
 	f := parseFlags(tokens(m))
 	urls := a.collectURLs(ctx, m, f.URLs)
@@ -219,7 +216,7 @@ func (a *App) cmdGofileDL(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	})
 }
 
-func (a *App) cmdMega(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdMega(ctx context.Context, u *Update) {
 	m := u.Message
 	f := parseFlags(tokens(m))
 	urls := a.collectURLs(ctx, m, f.URLs)
@@ -254,7 +251,7 @@ func (a *App) cmdMega(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	})
 }
 
-func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdDrive(ctx context.Context, u *Update) {
 	m := u.Message
 	uid := userID(m)
 
@@ -272,7 +269,7 @@ func (a *App) cmdDrive(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 		defer os.RemoveAll(tmpDir)
 
 		f := mediaOf(m.ReplyToMessage)
-		p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmpDir, nil)
+		p, err := a.tg.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, tmpDir, nil)
 		if err != nil {
 			a.reply(ctx, m, "Download failed: "+code(err.Error()))
 			return
@@ -362,7 +359,7 @@ func (a *App) torrentFileTarget(ctx context.Context, f *dl.TGFile) (string, erro
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	p, err := a.api.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dir, nil)
+	p, err := a.tg.Download(ctx, tg.FileRef{FileID: f.FileID, Name: f.Name, Size: f.Size}, dir, nil)
 	if err != nil {
 		return "", err
 	}
@@ -373,7 +370,7 @@ func (a *App) torrentFileTarget(ctx context.Context, f *dl.TGFile) (string, erro
 	return "torrent:" + p, nil
 }
 
-func (a *App) cmdTorrent(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdTorrent(ctx context.Context, u *Update) {
 	m := u.Message
 	var target string
 	for _, t := range tokens(m) {
@@ -521,7 +518,7 @@ func parseAriaFlags(toks []string, defaultLimit string) (map[string]any, []strin
 	return opts, rest
 }
 
-func (a *App) cmdAria(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdAria(ctx context.Context, u *Update) {
 	m := u.Message
 	opts, rest := parseAriaFlags(tokens(m), a.cfg.GlobalSpeedLimit)
 	var target string
@@ -550,7 +547,7 @@ func (a *App) cmdAria(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
 	a.enqueue(ctx, m, target, dl.Args{Engine: "aria2", AriaOptions: opts})
 }
 
-func (a *App) cmdUnzip(ctx context.Context, _ *tgbot.Bot, u *models.Update) {
+func (a *App) cmdUnzip(ctx context.Context, u *Update) {
 	m := u.Message
 	f := parseFlags(tokens(m))
 	args := dl.Args{Unzip: true, Password: f.Password}

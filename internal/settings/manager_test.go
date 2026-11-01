@@ -60,7 +60,7 @@ func TestManagerReadOnlyProtection(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	roKeys := []string{"OWNER_ID", "TG_BOT_TOKEN", "TG_API_ID", "TG_API_HASH", "TG_BOT_API_URL", "DATA_DIR", "AUTH_DIR", "LOG_DIR"}
+	roKeys := []string{"OWNER_ID", "TG_BOT_TOKEN", "TG_API_ID", "TG_API_HASH", "DATA_DIR", "AUTH_DIR", "LOG_DIR"}
 	for _, k := range roKeys {
 		if _, err := mgr.Set(ctx, 100, k, "hacked", "test"); err == nil {
 			t.Errorf("expected error setting read-only key %s", k)

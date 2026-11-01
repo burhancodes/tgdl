@@ -109,6 +109,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+func (s *Store) DB() *sql.DB { return s.db }
+
 func (s *Store) migrate(ctx context.Context) error {
 	if typ, ok := s.idColumnType(ctx); ok && strings.Contains(strings.ToUpper(typ), "INT") {
 		slog.Info("migrating jobs table: INTEGER id -> TEXT")

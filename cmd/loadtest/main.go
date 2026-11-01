@@ -2,16 +2,11 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/burhanverse/tgdl/internal/tg"
 )
 
 func main() {
@@ -21,22 +16,16 @@ func main() {
 	}
 	filePath := os.Args[1]
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
-	}))
-	defer srv.Close()
-
-	api := tg.NewBotAPI(nil, "fake-token")
-	api.BaseURL = srv.URL
-
-	_, err := api.Upload(context.Background(), 123456, tg.Upload{
-		Path: filePath,
-		Kind: tg.KindDocument,
-	})
+	f, err := os.Open(filePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "upload failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "open file: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512*1024)
+	if _, err := io.CopyBuffer(io.Discard, f, buf); err != nil {
+		fmt.Fprintf(os.Stderr, "stream failed: %v\n", err)
 		os.Exit(1)
 	}
 

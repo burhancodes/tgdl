@@ -14,7 +14,6 @@ import (
 	"github.com/burhanverse/tgdl/internal/dl"
 	"github.com/burhanverse/tgdl/internal/store"
 	"github.com/burhanverse/tgdl/internal/tg"
-	"github.com/go-telegram/bot/models"
 )
 
 type mockSessionTG struct {
@@ -72,12 +71,12 @@ func TestRename_SingleInline(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	upd := &models.Update{
-		Message: &models.Message{
+	upd := &Update{
+		Message: &Message{
 			ID:   10,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
-			Document: &models.Document{
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
+			Document: &Document{
 				FileID:   "tg-file-1",
 				FileName: "Trix_The_Cold_Sato_san_is_Only_Sweet_to_Me_S01E01_WEBRip_1080p_AV1.mkv",
 				FileSize: 1000,
@@ -85,7 +84,7 @@ func TestRename_SingleInline(t *testing.T) {
 			Caption: "/rename The Cold Sato-san S01E01",
 		},
 	}
-	app.cmdRename(ctx, nil, upd)
+	app.cmdRename(ctx, upd)
 
 	jobs, err := st.ActiveJobsForChat(ctx, 100)
 	if err != nil {
@@ -109,51 +108,51 @@ func TestRename_SinglePrompted(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	doc := &models.Document{
+	doc := &Document{
 		FileID:   "tg-file-prompt",
 		FileName: "Original_File.mkv",
 		FileSize: 2000,
 	}
 
-	updPrompt := &models.Update{
-		Message: &models.Message{
+	updPrompt := &Update{
+		Message: &Message{
 			ID:       11,
-			Chat:     models.Chat{ID: 100},
-			From:     &models.User{ID: 200},
+			Chat:     Chat{ID: 100},
+			From:     &User{ID: 200},
 			Document: doc,
 			Caption:  "/rename",
 		},
 	}
-	app.cmdRename(ctx, nil, updPrompt)
+	app.cmdRename(ctx, updPrompt)
 
 	if len(mock.sends) == 0 || !strings.Contains(mock.sends[len(mock.sends)-1], "Send the new name") {
 		t.Fatalf("expected prompt 'Send the new name', got: %+v", mock.sends)
 	}
 
-	updOther := &models.Update{
-		Message: &models.Message{
+	updOther := &Update{
+		Message: &Message{
 			ID:   12,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 999},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 999},
 			Text: "Another User Name",
 		},
 	}
-	app.Default(ctx, nil, updOther)
+	app.Default(ctx, updOther)
 
 	jobs, _ := st.ActiveJobsForChat(ctx, 100)
 	if len(jobs) != 0 {
 		t.Fatalf("another user should not be able to answer prompt")
 	}
 
-	updUser := &models.Update{
-		Message: &models.Message{
+	updUser := &Update{
+		Message: &Message{
 			ID:   13,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "Verbatim Name Here",
 		},
 	}
-	app.Default(ctx, nil, updUser)
+	app.Default(ctx, updUser)
 
 	jobs, err := st.ActiveJobsForChat(ctx, 100)
 	if err != nil {
@@ -177,15 +176,15 @@ func TestRename_BatchFlow(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	updStart := &models.Update{
-		Message: &models.Message{
+	updStart := &Update{
+		Message: &Message{
 			ID:   20,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "/rename batch",
 		},
 	}
-	app.cmdRename(ctx, nil, updStart)
+	app.cmdRename(ctx, updStart)
 
 	sess, ok := app.renameSessions.Get(100, 200)
 	if !ok || sess == nil {
@@ -193,19 +192,19 @@ func TestRename_BatchFlow(t *testing.T) {
 	}
 
 	for i := 1; i <= 3; i++ {
-		updFile := &models.Update{
-			Message: &models.Message{
+		updFile := &Update{
+			Message: &Message{
 				ID:   20 + i,
-				Chat: models.Chat{ID: 100},
-				From: &models.User{ID: 200},
-				Document: &models.Document{
+				Chat: Chat{ID: 100},
+				From: &User{ID: 200},
+				Document: &Document{
 					FileID:   fmt.Sprintf("f-%d", i),
 					FileName: fmt.Sprintf("Episode_%d_raw.mkv", i),
 					FileSize: 5000,
 				},
 			},
 		}
-		app.Default(ctx, nil, updFile)
+		app.Default(ctx, updFile)
 	}
 
 	sess, _ = app.renameSessions.Get(100, 200)
@@ -214,29 +213,29 @@ func TestRename_BatchFlow(t *testing.T) {
 	}
 
 	mock.sends = nil
-	updMismatch := &models.Update{
-		Message: &models.Message{
+	updMismatch := &Update{
+		Message: &Message{
 			ID:   30,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "Line 1\nLine 2",
 		},
 	}
-	app.Default(ctx, nil, updMismatch)
+	app.Default(ctx, updMismatch)
 	if len(mock.sends) == 0 || !strings.Contains(mock.sends[len(mock.sends)-1], "Line count mismatch") {
 		t.Fatalf("expected mismatch notice, got: %+v", mock.sends)
 	}
 
 	mock.sends = nil
-	updNames := &models.Update{
-		Message: &models.Message{
+	updNames := &Update{
+		Message: &Message{
 			ID:   31,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "Show S01E01\nShow S01E02\nShow S01E03",
 		},
 	}
-	app.Default(ctx, nil, updNames)
+	app.Default(ctx, updNames)
 	if len(mock.sends) == 0 || !strings.Contains(mock.sends[len(mock.sends)-1], "Rename Preview") {
 		t.Fatalf("expected preview message, got: %+v", mock.sends)
 	}
@@ -245,20 +244,18 @@ func TestRename_BatchFlow(t *testing.T) {
 		t.Errorf("preview missing expected names: %s", previewText)
 	}
 
-	applyQuery := &models.Update{
-		CallbackQuery: &models.CallbackQuery{
+	applyQuery := &Update{
+		CallbackQuery: &CallbackQuery{
 			ID:   "cb-apply",
-			From: models.User{ID: 200},
+			From: User{ID: 200},
 			Data: "rename:apply",
-			Message: models.MaybeInaccessibleMessage{
-				Message: &models.Message{
-					ID:   123,
-					Chat: models.Chat{ID: 100},
-				},
+			Message: &Message{
+				ID:   123,
+				Chat: Chat{ID: 100},
 			},
 		},
 	}
-	app.cbRename(ctx, nil, applyQuery)
+	app.cbRename(ctx, applyQuery)
 
 	if _, ok := app.renameSessions.Get(100, 200); ok {
 		t.Error("expected session to be removed after apply")
@@ -292,30 +289,28 @@ func TestRename_Cancel(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	updStart := &models.Update{
-		Message: &models.Message{
+	updStart := &Update{
+		Message: &Message{
 			ID:   40,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "/rename batch",
 		},
 	}
-	app.cmdRename(ctx, nil, updStart)
+	app.cmdRename(ctx, updStart)
 
-	cancelQuery := &models.Update{
-		CallbackQuery: &models.CallbackQuery{
+	cancelQuery := &Update{
+		CallbackQuery: &CallbackQuery{
 			ID:   "cb-cancel",
-			From: models.User{ID: 200},
+			From: User{ID: 200},
 			Data: "rename:cancel",
-			Message: models.MaybeInaccessibleMessage{
-				Message: &models.Message{
-					ID:   123,
-					Chat: models.Chat{ID: 100},
-				},
+			Message: &Message{
+				ID:   123,
+				Chat: Chat{ID: 100},
 			},
 		},
 	}
-	app.cbRename(ctx, nil, cancelQuery)
+	app.cbRename(ctx, cancelQuery)
 
 	if _, ok := app.renameSessions.Get(100, 200); ok {
 		t.Error("expected batch session removed after cancel")
@@ -331,15 +326,15 @@ func TestRename_TTLExpiry(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	updStart := &models.Update{
-		Message: &models.Message{
+	updStart := &Update{
+		Message: &Message{
 			ID:   50,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "/rename batch",
 		},
 	}
-	app.cmdRename(ctx, nil, updStart)
+	app.cmdRename(ctx, updStart)
 
 	time.Sleep(50 * time.Millisecond)
 	if _, ok := app.renameSessions.Get(100, 200); ok {
@@ -359,42 +354,42 @@ func TestRename_BatchDuplicates(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	updStart := &models.Update{
-		Message: &models.Message{
+	updStart := &Update{
+		Message: &Message{
 			ID:   60,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "/rename batch",
 		},
 	}
-	app.cmdRename(ctx, nil, updStart)
+	app.cmdRename(ctx, updStart)
 
 	for i := 1; i <= 2; i++ {
-		updFile := &models.Update{
-			Message: &models.Message{
+		updFile := &Update{
+			Message: &Message{
 				ID:   60 + i,
-				Chat: models.Chat{ID: 100},
-				From: &models.User{ID: 200},
-				Document: &models.Document{
+				Chat: Chat{ID: 100},
+				From: &User{ID: 200},
+				Document: &Document{
 					FileID:   fmt.Sprintf("dup-%d", i),
 					FileName: fmt.Sprintf("file_%d.mkv", i),
 					FileSize: 100,
 				},
 			},
 		}
-		app.Default(ctx, nil, updFile)
+		app.Default(ctx, updFile)
 	}
 
 	mock.sends = nil
-	updNames := &models.Update{
-		Message: &models.Message{
+	updNames := &Update{
+		Message: &Message{
 			ID:   70,
-			Chat: models.Chat{ID: 100},
-			From: &models.User{ID: 200},
+			Chat: Chat{ID: 100},
+			From: &User{ID: 200},
 			Text: "Same Title\nSame Title",
 		},
 	}
-	app.Default(ctx, nil, updNames)
+	app.Default(ctx, updNames)
 	if len(mock.sends) == 0 {
 		t.Fatal("expected preview message")
 	}
